@@ -482,6 +482,19 @@ if uploaded_file is not None:
             if "Average copy number/transduced cell" in summary_df.columns:
                 summary_df["Average copy number/transduced cell"] = summary_df["Average copy number/transduced cell"].astype(str)
             st.dataframe(summary_df)
+
+            # --- Export Summary Table as Excel ---
+            excel_buffer = io.BytesIO()
+            summary_df.to_excel(excel_buffer, index=False)
+            excel_buffer.seek(0)
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"Summary_Table_{timestamp}.xlsx"
+            st.download_button(
+                label="Export Summary Table as Excel",
+                data=excel_buffer,
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
         except Exception as e:
             st.error(f"Error creating summary table: {e}")
             st.write("Please ensure the CSV contains 'Sample/NTC/Control', a target column ('Target' or 'Target (Name)'), and a concentration column ('Conc. [copies/µL]' or 'Conc. [cp/ÂµL] (dPCR reaction)') and that the target column contains 'WPRE' and 'RPP30' values.")
