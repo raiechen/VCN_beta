@@ -12,8 +12,8 @@ NTC_POS_PART_CUTOFF = 5
 MAX_CV_PERCENTAGE = 21.0  # Representing 0.21 as 21% for direct comparison if CVs are in %
 LLOQ_WPRE_COPIES_UL = 37
 LLOQ_RPP30_COPIES_UL = 146
-CAR_PC_MIN_COPY_NUMBER_CELL = 0.0 # Assuming this relates to copy number/cell
-CAR_PC_MAX_COPY_NUMBER_CELL = 0.0 # Assuming this relates to copy number/cell
+CAR_PC_MIN_COPY_NUMBER_CELL = "TBD" # Assuming this relates to copy number/cell
+CAR_PC_MAX_COPY_NUMBER_CELL = "TBD" # Assuming this relates to copy number/cell
 
 # Note: MAX_CV_PERCENTAGE is defined as 21.0. If your CV calculations result in values like 0.21,
 # you'll need to either multiply them by 100 before comparing with MAX_CV_PERCENTAGE,
@@ -254,6 +254,16 @@ if uploaded_file is not None:
         # status_color remains "red"
 
     st.markdown(f"<h4 style='color: {status_color};'>{assay_status_message}</h4>", unsafe_allow_html=True)
+    # Display threshold values used in analysis
+    st.write('**Thresholds Used in Analysis:**')
+    st.write(f"MIN_VALID_PARTITION: {MIN_VALID_PARTITION}")
+    st.write(f"NTC_POS_PART_CUTOFF: {NTC_POS_PART_CUTOFF}")
+    st.write(f"MAX_CV_PERCENTAGE: {MAX_CV_PERCENTAGE}")
+    st.write(f"LLOQ_WPRE_COPIES_UL: {LLOQ_WPRE_COPIES_UL}")
+    st.write(f"LLOQ_RPP30_COPIES_UL: {LLOQ_RPP30_COPIES_UL}")
+    st.write(f"CAR_PC_MIN_COPY_NUMBER_CELL: {CAR_PC_MIN_COPY_NUMBER_CELL}")
+    st.write(f"CAR_PC_MAX_COPY_NUMBER_CELL: {CAR_PC_MAX_COPY_NUMBER_CELL}")
+    st.write(f"MAX_CV: {MAX_CV}")
     st.markdown("---") # Add a horizontal line for separation
     with st.expander("CSV Uploaded Table", expanded=False):
         st.dataframe(df)
