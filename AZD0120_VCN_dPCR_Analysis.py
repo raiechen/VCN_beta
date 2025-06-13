@@ -94,12 +94,27 @@ def add_designation_column(summary_df, original_df, min_valid_partition, ntc_pos
         else: # If helper column itself couldn't be created (e.g. precursor missing)
             summary_df[col] = False # Create it as all False for safety in the 'all' condition
 
-    # 6. Determine Designation
-    # Ensure all helper boolean columns exist before trying to combine them
-    final_check_cols = [summary_df.get(col_name, pd.Series(False, index=summary_df.index)) for col_name in helper_bool_cols]
-    
-    conditions_met = pd.concat(final_check_cols, axis=1).all(axis=1)
-    summary_df["Designation"] = np.where(conditions_met, "Pass", "Fail")
+    # 6. Determine Designation and Designation Summary
+    def get_designation_summary(row):
+        reasons = []
+        if not row['is_partitions_valid_ok']:
+            reasons.append(f"Partitions < {min_valid_partition}")
+        if not row['is_wpre_cv_ok']:
+            reasons.append(f"WPRE %CV > {max_cv_percentage}%")
+        if not row['is_rpp30_cv_ok']:
+            reasons.append(f"RPP30 %CV > {max_cv_percentage}%")
+        if not row['is_wpre_lloq_ok']:
+            reasons.append(f"WPRE < {lloq_wpre_copies_ul}")
+        if not row['is_rpp30_lloq_ok']:
+            reasons.append(f"RPP30 < {lloq_rpp30_copies_ul}")
+        
+        if not reasons:
+            return "All Pass"
+        else:
+            return "; ".join(reasons)
+
+    summary_df["Designation Summary"] = summary_df.apply(get_designation_summary, axis=1)
+    summary_df["Designation"] = np.where(summary_df["Designation Summary"] == "All Pass", "Pass", "Fail")
     
     return summary_df
 
@@ -225,35 +240,86 @@ if uploaded_file is not None:
 
     # Display the DataFrame
 # Assay Status Check based on NTC performance
-    assay_status_message = "Assay Status: Fail"
-    status_color = "red"
+    assay_status_message = "Assay Status: Pass"
+    status_color = "green"
+    assay_failure_reasons = []
 
-    # Check if essential columns exist for NTC check
-    possible_positive_part_cols = ["Partitions (positive)", "Partitions (Positive)"]
-    positive_part_col = next((col for col in possible_positive_part_cols if col in df.columns), None)
-    if "Sample/NTC/Control" in df.columns and positive_part_col is not None:
-        ntc_df = df[df["Sample/NTC/Control"].astype(str).str.startswith("NTC-")]
-        
-        if not ntc_df.empty:
-            # Attempt to convert NTC "Partitions (Positive)/(positive)" to numeric
-            ntc_partitions_positive_values = pd.to_numeric(ntc_df[positive_part_col], errors='coerce')
-            
-            # Check for successful conversion and if all values meet the cutoff
-            if ntc_partitions_positive_values.notna().all() and \
-               (ntc_partitions_positive_values <= NTC_POS_PART_CUTOFF).all():
-                assay_status_message = "Assay Status: Pass"
-                status_color = "green"
-            # If not all conditions met (e.g., conversion errors, values too high), it remains "Fail"
-        else:
-            # No NTC samples found, consider it a failure or warning for the assay status check
-            assay_status_message = "Assay Status: Fail (No NTC samples found for check)"
-            # status_color remains "red"
+    # --- Comprehensive Assay Status Checks ---
+
+    # 1. NTC Positive Partition Check
+    ntc_df = df[df["Sample/NTC/Control"].astype(str).str.startswith("NTC-")]
+    if ntc_df.empty:
+        assay_failure_reasons.append("NTC Check: No NTC samples found.")
     else:
-        # Required columns for NTC check are missing
-        assay_status_message = "Assay Status: Fail (Required columns for NTC check missing)"
-        # status_color remains "red"
+        ntc_positive_parts = pd.to_numeric(ntc_df[positive_part_col], errors='coerce')
+        failing_ntcs = ntc_df[ntc_positive_parts > NTC_POS_PART_CUTOFF]
+        if not failing_ntcs.empty:
+            for _, row in failing_ntcs.iterrows():
+                reason = f"NTC Check: Sample '{row['Sample/NTC/Control']}' failed with {row[positive_part_col]} positive partitions (threshold: <= {NTC_POS_PART_CUTOFF})."
+                assay_failure_reasons.append(reason)
+
+    # 2. Valid Partitions Check for NTC & PC
+    pc_df = df[df["Sample/NTC/Control"].astype(str).str.startswith("PC-")]
+    control_samples_df = pd.concat([ntc_df, pc_df])
+    if control_samples_df.empty:
+        assay_failure_reasons.append("Partition Check: No NTC or PC samples found to check.")
+    else:
+        valid_partitions = pd.to_numeric(control_samples_df[valid_part_col], errors='coerce')
+        failing_partitions = control_samples_df[valid_partitions < MIN_VALID_PARTITION]
+        if not failing_partitions.empty:
+            for _, row in failing_partitions.iterrows():
+                reason = f"Partition Check: Sample '{row['Sample/NTC/Control']}' failed with {row[valid_part_col]} valid partitions (threshold: >= {MIN_VALID_PARTITION})."
+                assay_failure_reasons.append(reason)
+
+    # 3. PC %CV Checks
+    if pc_df.empty:
+        assay_failure_reasons.append("PC CV Check: No PC samples found.")
+    else:
+        # Create a pivot table for PC samples to calculate CV
+        pc_pivot = pc_df.pivot_table(index="Sample/NTC/Control", columns=target_col, values=conc_col).reset_index()
+        pc_pivot.rename(columns={"WPRE": "WPRE Concentration", "RPP30": "RPP30 Concentration"}, inplace=True)
+        
+        # Add a single 'Sample Group' for CV calculation across all PC replicates
+        pc_pivot['Sample Group'] = 'PC'
+
+        # WPRE %CV for PC
+        if "WPRE Concentration" in pc_pivot.columns:
+            wpre_conc_pc = pd.to_numeric(pc_pivot["WPRE Concentration"], errors='coerce')
+            if len(wpre_conc_pc.dropna()) > 1: # Need at least 2 values for std dev
+                wpre_mean_pc = wpre_conc_pc.mean()
+                wpre_std_pc = wpre_conc_pc.std()
+                wpre_cv_pc = (wpre_std_pc / wpre_mean_pc) * 100 if wpre_mean_pc != 0 else 0
+                if wpre_cv_pc > MAX_CV_PERCENTAGE:
+                    assay_failure_reasons.append(f"PC CV Check: WPRE Concentration %CV is {wpre_cv_pc:.2f}% (threshold: <= {MAX_CV_PERCENTAGE}%).")
+            else:
+                 assay_failure_reasons.append("PC CV Check: Not enough PC WPRE data points to calculate %CV.")
+        
+        # RPP30 %CV for PC
+        if "RPP30 Concentration" in pc_pivot.columns:
+            rpp30_conc_pc = pd.to_numeric(pc_pivot["RPP30 Concentration"], errors='coerce')
+            if len(rpp30_conc_pc.dropna()) > 1:
+                rpp30_mean_pc = rpp30_conc_pc.mean()
+                rpp30_std_pc = rpp30_conc_pc.std()
+                rpp30_cv_pc = (rpp30_std_pc / rpp30_mean_pc) * 100 if rpp30_mean_pc != 0 else 0
+                if rpp30_cv_pc > MAX_CV_PERCENTAGE:
+                    assay_failure_reasons.append(f"PC CV Check: RPP30 Concentration %CV is {rpp30_cv_pc:.2f}% (threshold: <= {MAX_CV_PERCENTAGE}%).")
+            else:
+                assay_failure_reasons.append("PC CV Check: Not enough PC RPP30 data points to calculate %CV.")
+
+    # Finalize Status
+    if assay_failure_reasons:
+        assay_status_message = "Assay Status: Fail"
+        status_color = "red"
 
     st.markdown(f"<h4 style='color: {status_color};'>{assay_status_message}</h4>", unsafe_allow_html=True)
+
+    # Always display the criteria in an expander
+    with st.expander("View Assay Status Criteria"):
+        if not assay_failure_reasons:
+            st.success("All assay status checks passed (NTC Partitions, Control Valid Partitions, PC %CV).")
+        else:
+            for reason in assay_failure_reasons:
+                st.error(reason)
     # Display threshold values used in analysis
     st.write('**Thresholds Used in Analysis:**')
     st.write(f"MIN_VALID_PARTITION: {MIN_VALID_PARTITION}")
@@ -484,6 +550,8 @@ if uploaded_file is not None:
                 final_columns.append("RPP30 Concentration %CV")
             if "Designation" in summary_df.columns:
                 final_columns.append("Designation")
+            if "Designation Summary" in summary_df.columns:
+                final_columns.append("Designation Summary")
             
             # Ensure only existing columns are selected
             summary_df = summary_df[[col for col in final_columns if col in summary_df.columns]]
