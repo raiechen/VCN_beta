@@ -9,17 +9,11 @@ import re # For parsing Input ID
 # Define global constants for analysis thresholds and parameters
 MIN_VALID_PARTITION = 7000
 NTC_POS_PART_CUTOFF = 5
-MAX_CV_PERCENTAGE = 21.0  # Representing 0.21 as 21% for direct comparison if CVs are in %
+MAX_CV_PERCENTAGE = 21.0  # CV threshold as percentage (21%)
 LLOQ_WPRE_COPIES_UL = 37
 LLOQ_RPP30_COPIES_UL = 146
-CAR_PC_MIN_COPY_NUMBER_CELL = "TBD" # Assuming this relates to copy number/cell
-CAR_PC_MAX_COPY_NUMBER_CELL = "TBD" # Assuming this relates to copy number/cell
-
-# Note: MAX_CV_PERCENTAGE is defined as 21.0. If your CV calculations result in values like 0.21,
-# you'll need to either multiply them by 100 before comparing with MAX_CV_PERCENTAGE,
-# or define MAX_CV as 0.21 and compare directly.
-# The user specified max_cv = 0.21, so let's stick to that for direct use.
-MAX_CV = 0.21
+CAR_PC_MIN_COPY_NUMBER_CELL = "TBD"  # To be determined
+CAR_PC_MAX_COPY_NUMBER_CELL = "TBD"  # To be determined
 def add_designation_column(summary_df, original_df, min_valid_partition, ntc_pos_part_cutoff, max_cv_percentage, lloq_wpre_copies_ul, lloq_rpp30_copies_ul):
     """
     Adds a 'Designation' column to the summary_df based on several criteria.
@@ -29,7 +23,7 @@ def add_designation_column(summary_df, original_df, min_valid_partition, ntc_pos
         original_df (pd.DataFrame): The original uploaded data.
         min_valid_partition (int): Threshold for MIN_VALID_PARTITION.
         ntc_pos_part_cutoff (int): Threshold for NTC_POS_PART_CUTOFF.
-        max_cv_percentage (float): Threshold for MAX_CV_PERCENTAGE.
+        max_cv_percentage (float): Threshold for MAX_CV_PERCENTAGE (as percentage, e.g., 21.0 for 21%).
         lloq_wpre_copies_ul (float): Threshold for LLOQ_WPRE_COPIES_UL.
         lloq_rpp30_copies_ul (float): Threshold for LLOQ_RPP30_COPIES_UL.
 
@@ -79,20 +73,18 @@ def add_designation_column(summary_df, original_df, min_valid_partition, ntc_pos
         else:
             summary_df[col] = np.nan # Add as NaN if missing to prevent key errors later
 
-    # 4. Boolean helper columns
-    summary_df['is_wpre_cv_ok'] = summary_df["WPRE Concentration %CV"] <= max_cv_percentage
-    summary_df['is_rpp30_cv_ok'] = summary_df["RPP30 Concentration %CV"] <= max_cv_percentage
-    summary_df['is_partitions_valid_ok'] = summary_df["Partitions (valid)"] >= min_valid_partition
-    summary_df['is_wpre_lloq_ok'] = summary_df["WPRE Concentration"] >= lloq_wpre_copies_ul # New per-replicate WPRE LLOQ
-    summary_df['is_rpp30_lloq_ok'] = summary_df["RPP30 Concentration"] >= lloq_rpp30_copies_ul # This was already per-replicate
+    # 4. Boolean helper columns - ensure we handle NaN values properly
+    summary_df['is_wpre_cv_ok'] = (summary_df["WPRE Concentration %CV"] <= max_cv_percentage).fillna(False)
+    summary_df['is_rpp30_cv_ok'] = (summary_df["RPP30 Concentration %CV"] <= max_cv_percentage).fillna(False)
+    summary_df['is_partitions_valid_ok'] = (summary_df["Partitions (valid)"] >= min_valid_partition).fillna(False)
+    summary_df['is_wpre_lloq_ok'] = (summary_df["WPRE Concentration"] >= lloq_wpre_copies_ul).fillna(False)
+    summary_df['is_rpp30_lloq_ok'] = (summary_df["RPP30 Concentration"] >= lloq_rpp30_copies_ul).fillna(False)
 
-    # 5. Fill NaNs in boolean checks with False (conservative: if info missing, condition fails)
+    # 5. Ensure all boolean columns exist (already handled in step 4)
     helper_bool_cols = ['is_wpre_cv_ok', 'is_rpp30_cv_ok', 'is_partitions_valid_ok', 'is_wpre_lloq_ok', 'is_rpp30_lloq_ok']
     for col in helper_bool_cols:
-        if col in summary_df.columns:
-            summary_df[col] = summary_df[col].fillna(False)
-        else: # If helper column itself couldn't be created (e.g. precursor missing)
-            summary_df[col] = False # Create it as all False for safety in the 'all' condition
+        if col not in summary_df.columns:
+            summary_df[col] = False
 
     # 6. Determine Designation and Designation Summary
     def get_designation_summary(row):
@@ -129,7 +121,12 @@ uploaded_file = st.file_uploader("Choose an csv file (.csv)", type=['csv'])
 
 # If a file is uploaded
 if uploaded_file is not None:
-    
+    # Store file identifier to detect new uploads
+    current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+    if 'last_uploaded_file' not in st.session_state or st.session_state.last_uploaded_file != current_file_id:
+        st.session_state.last_uploaded_file = current_file_id
+        # Reset all session state related to calculations
+        st.session_state.user_cd19_inputs = {}    
 
     # Robust CSV reading to handle optional 'sep=' line and different encodings
     skiprows_val = 0
@@ -324,12 +321,11 @@ if uploaded_file is not None:
     st.write('**Thresholds Used in Analysis:**')
     st.write(f"MIN_VALID_PARTITION: {MIN_VALID_PARTITION}")
     st.write(f"NTC_POS_PART_CUTOFF: {NTC_POS_PART_CUTOFF}")
-    st.write(f"MAX_CV_PERCENTAGE: {MAX_CV_PERCENTAGE}")
+    st.write(f"MAX_CV_PERCENTAGE: {MAX_CV_PERCENTAGE}%")
     st.write(f"LLOQ_WPRE_COPIES_UL: {LLOQ_WPRE_COPIES_UL}")
     st.write(f"LLOQ_RPP30_COPIES_UL: {LLOQ_RPP30_COPIES_UL}")
     st.write(f"CAR_PC_MIN_COPY_NUMBER_CELL: {CAR_PC_MIN_COPY_NUMBER_CELL}")
     st.write(f"CAR_PC_MAX_COPY_NUMBER_CELL: {CAR_PC_MAX_COPY_NUMBER_CELL}")
-    st.write(f"MAX_CV: {MAX_CV}")
     st.markdown("---") # Add a horizontal line for separation
     with st.expander("CSV Uploaded Table", expanded=False):
         st.dataframe(df)
@@ -365,9 +361,9 @@ if uploaded_file is not None:
                 wpre_conc = pd.to_numeric(summary_df["WPRE Concentration"], errors='coerce')
                 rpp30_conc = pd.to_numeric(summary_df["RPP30 Concentration"], errors='coerce')
                 
-                # Perform calculation, np.where handles division by zero or NaN in RPP30
+                # Perform calculation, using np.isclose for floating-point comparison
                 summary_df["Copy number/cell"] = np.where(
-                    (rpp30_conc == 0) | (rpp30_conc.isna()),
+                    (np.isclose(rpp30_conc, 0, atol=1e-10)) | (rpp30_conc.isna()),
                     np.nan,  # Result is NaN if RPP30 is 0 or NaN
                     (wpre_conc / rpp30_conc) * 2
                 )
@@ -379,7 +375,7 @@ if uploaded_file is not None:
             if "Sample ID" in summary_df.columns:
                 # Extract Sample Group (part before '-')
                 summary_df['Sample Group'] = summary_df['Sample ID'].astype(str).str.split('-').str[0]
-# Calculate Average "Copy number/cell" per Sample Group
+                # Calculate Average "Copy number/cell" per Sample Group
                 if "Copy number/cell" in summary_df.columns:
                     # Ensure "Copy number/cell" is numeric for the mean calculation
                     copy_number_cell_numeric = pd.to_numeric(summary_df["Copy number/cell"], errors='coerce')
@@ -396,13 +392,12 @@ if uploaded_file is not None:
                 if 'user_cd19_inputs' not in st.session_state:
                     st.session_state.user_cd19_inputs = {}
 
-                # Synchronize session state: ensure it only contains current groups,
-                # preserving existing values or defaulting new ones to 0.
-                # This handles cases like file re-uploads with different sample groups.
-                current_valid_inputs = {}
+                # Always reset CD19 values for new file uploads
+                st.session_state.user_cd19_inputs = {}
+                
+                # Initialize with 0.0 for all groups
                 for group in unique_sample_groups:
-                    current_valid_inputs[group] = st.session_state.user_cd19_inputs.get(group, 0.0) # Default to 0.0
-                st.session_state.user_cd19_inputs = current_valid_inputs
+                    st.session_state.user_cd19_inputs[group] = 0.0
                 
                 # Create input fields for each unique sample group
                 for group in unique_sample_groups:
@@ -434,7 +429,7 @@ if uploaded_file is not None:
                     grouped_wpre_std = wpre_conc_numeric.groupby(summary_df['Sample Group']).transform('std')
                     
                     summary_df["WPRE Concentration %CV"] = np.where(
-                        (grouped_wpre_mean == 0) | grouped_wpre_mean.isna() | grouped_wpre_std.isna(),
+                        (np.isclose(grouped_wpre_mean, 0, atol=1e-10)) | grouped_wpre_mean.isna() | grouped_wpre_std.isna(),
                         np.nan, # %CV is NaN if mean is 0, or std is NaN (e.g. single sample group)
                         (grouped_wpre_std / grouped_wpre_mean) * 100
                     ).round(2)
@@ -448,7 +443,7 @@ if uploaded_file is not None:
                     grouped_rpp30_std = rpp30_conc_numeric.groupby(summary_df['Sample Group']).transform('std')
 
                     summary_df["RPP30 Concentration %CV"] = np.where(
-                        (grouped_rpp30_mean == 0) | grouped_rpp30_mean.isna() | grouped_rpp30_std.isna(),
+                        (np.isclose(grouped_rpp30_mean, 0, atol=1e-10)) | grouped_rpp30_mean.isna() | grouped_rpp30_std.isna(),
                         np.nan, # %CV is NaN if mean is 0, or std is NaN
                         (grouped_rpp30_std / grouped_rpp30_mean) * 100
                     ).round(2)
@@ -461,14 +456,14 @@ if uploaded_file is not None:
                 summary_df["WPRE Concentration %CV"] = np.nan
                 summary_df["RPP30 Concentration %CV"] = np.nan
 
-# Calculate "Average copy number/transduced cell"
+            # Calculate "Average copy number/transduced cell"
             if "Avg CnC per Group" in summary_df.columns and "User input %CD19" in summary_df.columns:
                 # Ensure inputs are numeric for calculation
                 avg_cnc_group = pd.to_numeric(summary_df["Avg CnC per Group"], errors='coerce')
                 user_input_cd19 = pd.to_numeric(summary_df["User input %CD19"], errors='coerce')
 
                 # Condition for "N/A": CD19 input is 0 or NaN, or Avg CnC per Group is NaN
-                condition_na = (user_input_cd19 == 0) | user_input_cd19.isna() | avg_cnc_group.isna()
+                condition_na = (np.isclose(user_input_cd19, 0, atol=1e-10)) | user_input_cd19.isna() | avg_cnc_group.isna()
                 
                 # Initialize with np.nan for numeric calculations
                 avg_copy_transduced_cell_values = np.full(len(summary_df), np.nan, dtype=float)
@@ -485,16 +480,13 @@ if uploaded_file is not None:
                     avg_copy_transduced_cell_values[valid_indices] = np.round(avg_copy_transduced_cell_values[valid_indices], 2)
 
                 # Now, create the final column, converting np.nan to "N/A" string where appropriate
-                # and applying "N/A" based on the original condition_na
                 summary_df["Average copy number/transduced cell"] = "N/A" # Default to "N/A"
                 # Assign calculated rounded values where valid_indices are true
                 summary_df.loc[valid_indices, "Average copy number/transduced cell"] = avg_copy_transduced_cell_values[valid_indices]
-                # Ensure that any original condition_na (like division by zero) explicitly results in "N/A"
-                # This also handles cases where avg_cnc_group might be non-NaN but cd19 input is zero.
+                # Ensure that any original condition_na explicitly results in "N/A"
                 summary_df.loc[condition_na, "Average copy number/transduced cell"] = "N/A"
             else:
                 summary_df["Average copy number/transduced cell"] = "N/A" # Default if precursor columns are missing
-
             # Calculate Designation
             if not summary_df.empty and 'Sample Group' in summary_df.columns and df is not None and not df.empty:
                 # Ensure original_df (df) has 'Sample Group' if it's derived from 'Sample/NTC/Control'
@@ -534,27 +526,27 @@ if uploaded_file is not None:
 
             # Select and reorder columns for the final display
             final_columns = ["Sample ID"]
-            if "WPRE Concentration" in summary_df.columns:
-                final_columns.append("WPRE Concentration")
-            if "RPP30 Concentration" in summary_df.columns:
-                final_columns.append("RPP30 Concentration")
-            if "Copy number/cell" in summary_df.columns:
-                final_columns.append("Copy number/cell")
-            if "User input %CD19" in summary_df.columns:
-                final_columns.append("User input %CD19")
-            if "Average copy number/transduced cell" in summary_df.columns:
-                final_columns.append("Average copy number/transduced cell")
-            if "WPRE Concentration %CV" in summary_df.columns: # Add new %CV column
-                final_columns.append("WPRE Concentration %CV")
-            if "RPP30 Concentration %CV" in summary_df.columns: # Add new %CV column
-                final_columns.append("RPP30 Concentration %CV")
-            if "Designation" in summary_df.columns:
-                final_columns.append("Designation")
-            if "Designation Summary" in summary_df.columns:
-                final_columns.append("Designation Summary")
+            required_columns = {
+                "WPRE Concentration": "WPRE Concentration",
+                "RPP30 Concentration": "RPP30 Concentration", 
+                "Copy number/cell": "Copy number/cell",
+                "User input %CD19": "User input %CD19",
+                "Average copy number/transduced cell": "Average copy number/transduced cell",
+                "WPRE Concentration %CV": "WPRE Concentration %CV",
+                "RPP30 Concentration %CV": "RPP30 Concentration %CV",
+                "Designation": "Designation",
+                "Designation Summary": "Designation Summary"
+            }
             
-            # Ensure only existing columns are selected
-            summary_df = summary_df[[col for col in final_columns if col in summary_df.columns]]
+            # Add columns that exist in the dataframe
+            for col_key, col_name in required_columns.items():
+                if col_key in summary_df.columns:
+                    final_columns.append(col_name)
+            
+            # Ensure only existing columns are selected and dataframe is not empty
+            existing_columns = [col for col in final_columns if col in summary_df.columns]
+            if existing_columns:
+                summary_df = summary_df[existing_columns]
 
 # Convert 'Average copy number/transduced cell' to string to handle "N/A" for display
             if "Average copy number/transduced cell" in summary_df.columns:
