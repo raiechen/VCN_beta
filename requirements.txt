@@ -82,11 +82,6 @@ shellingham==1.5.4
 six==1.17.0
 smmap==5.0.2
 sniffio==1.3.1
-snowflake-cli==3.10.0
-snowflake-cli-labs==3.10.0
-snowflake-connector-python==3.15.0
-snowflake-snowpark-python==1.33.0
-snowflake.core==1.5.1
 sortedcontainers==2.4.0
 streamlit==1.45.1
 tenacity==9.1.2
