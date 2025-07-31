@@ -440,9 +440,9 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                 st.subheader("User Input for %CD19 Values")
                 st.write("Please enter the %CD19 values for each sample group:")
                 
-                # Get unique sample groups (excluding controls)
+                # Get unique sample groups (excluding only NTC, but including PC)
                 sample_groups = summary_df['Sample Group'].unique()
-                control_groups = ['NTC', 'PC']
+                control_groups = ['NTC']  # Only exclude NTC, include PC for CD19 input
                 sample_groups_filtered = [group for group in sample_groups if group not in control_groups]
                 
                 # Initialize user_cd19_inputs for this file if not exists
