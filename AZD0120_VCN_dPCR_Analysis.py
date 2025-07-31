@@ -380,7 +380,7 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                     "RPP30": "RPP30 Concentration" # Assuming "RPP30" is a value in "Target" column
                 }, inplace=True)
                 
-                # Remove NTC samples from the summary table
+                # Remove only NTC samples from the summary table, keep PC and all other samples
                 summary_df = summary_df[~summary_df["Sample ID"].astype(str).str.startswith("NTC")]
 
                 # Calculate "Copy number/cell"
@@ -444,6 +444,10 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                 sample_groups = summary_df['Sample Group'].unique()
                 control_groups = ['NTC']  # Only exclude NTC, include PC for CD19 input
                 sample_groups_filtered = [group for group in sample_groups if group not in control_groups]
+                
+                # Debug: Show what sample groups were found
+                st.write(f"**Debug:** Found sample groups: {list(sample_groups)}")
+                st.write(f"**Debug:** Sample groups for CD19 input: {sample_groups_filtered}")
                 
                 # Initialize user_cd19_inputs for this file if not exists
                 file_key = f"{uploaded_file.name}_cd19"
