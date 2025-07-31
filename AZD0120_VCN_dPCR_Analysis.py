@@ -137,6 +137,10 @@ if uploaded_files is not None and len(uploaded_files) > 0:
     if 'all_files_results' not in st.session_state:
         st.session_state.all_files_results = {}
     
+    # Initialize session state for CD19 user inputs
+    if 'user_cd19_inputs' not in st.session_state:
+        st.session_state.user_cd19_inputs = {}
+    
     # Process each uploaded file
     for file_index, uploaded_file in enumerate(uploaded_files):
         
@@ -144,11 +148,7 @@ if uploaded_files is not None and len(uploaded_files) > 0:
         st.markdown("---")
         
         # Store file identifier to detect new uploads
-        current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
-        if 'last_uploaded_file' not in st.session_state or st.session_state.last_uploaded_file != current_file_id:
-            st.session_state.last_uploaded_file = current_file_id
-            # Reset all session state related to calculations
-            st.session_state.user_cd19_inputs = {}    
+        current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"    
 
         # Robust CSV reading to handle optional 'sep=' line and different encodings
         skiprows_val = 0
@@ -436,10 +436,50 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                     summary_df["WPRE Concentration %CV"] = np.nan
                     summary_df["RPP30 Concentration %CV"] = np.nan
 
-                # For simplicity in multiple file mode, set default values for user inputs
-                summary_df["User input %CD19"] = 0.0
-                summary_df["Average copy number/transduced cell"] = "N/A"
-                    
+                # User input for %CD19 values
+                st.subheader("User Input for %CD19 Values")
+                st.write("Please enter the %CD19 values for each sample group:")
+                
+                # Get unique sample groups (excluding controls)
+                sample_groups = summary_df['Sample Group'].unique()
+                control_groups = ['NTC', 'PC']
+                sample_groups_filtered = [group for group in sample_groups if group not in control_groups]
+                
+                # Initialize user_cd19_inputs for this file if not exists
+                file_key = f"{uploaded_file.name}_cd19"
+                if file_key not in st.session_state.user_cd19_inputs:
+                    st.session_state.user_cd19_inputs[file_key] = {}
+                
+                # Create input fields for each sample group
+                for group in sample_groups_filtered:
+                    default_value = st.session_state.user_cd19_inputs[file_key].get(group, 0.0)
+                    user_input = st.number_input(
+                        f"%CD19 for {group}:",
+                        min_value=0.0,
+                        max_value=100.0,
+                        value=default_value,
+                        step=0.1,
+                        format="%.1f",
+                        key=f"{file_key}_{group}_cd19"
+                    )
+                    st.session_state.user_cd19_inputs[file_key][group] = user_input
+                
+                # Apply user inputs to summary_df
+                summary_df["User input %CD19"] = summary_df['Sample Group'].map(
+                    st.session_state.user_cd19_inputs[file_key]
+                ).fillna(0.0)
+                
+                # Calculate "Average copy number/transduced cell"
+                def calculate_avg_copy_per_transduced_cell(row):
+                    if pd.isna(row["Copy number/cell"]) or row["User input %CD19"] == 0:
+                        return "N/A"
+                    else:
+                        return (row["Copy number/cell"] / row["User input %CD19"]) * 100
+                
+                summary_df["Average copy number/transduced cell"] = summary_df.apply(
+                    calculate_avg_copy_per_transduced_cell, axis=1
+                )
+                
                 # Calculate Designation
                 if not summary_df.empty and 'Sample Group' in summary_df.columns and df is not None and not df.empty:
                     # Ensure original_df (df) has 'Sample Group' if it's derived from 'Sample/NTC/Control'
