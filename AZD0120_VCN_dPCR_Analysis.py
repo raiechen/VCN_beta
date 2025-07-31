@@ -14,6 +14,7 @@ LLOQ_WPRE_COPIES_UL = 37
 LLOQ_RPP30_COPIES_UL = 146
 CAR_PC_MIN_COPY_NUMBER_CELL = "TBD"  # To be determined
 CAR_PC_MAX_COPY_NUMBER_CELL = "TBD"  # To be determined
+
 def add_designation_column(summary_df, original_df, min_valid_partition, ntc_pos_part_cutoff, max_cv_percentage, lloq_wpre_copies_ul, lloq_rpp30_copies_ul):
     """
     Adds a 'Designation' column to the summary_df based on several criteria.
@@ -110,463 +111,485 @@ def add_designation_column(summary_df, original_df, min_valid_partition, ntc_pos
     
     return summary_df
 
+# Helper function to convert multiple DataFrames to a single Excel bytes object, each DF on a new sheet
+def dfs_to_excel_bytes(dfs_map):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        for sheet_name, df in dfs_map.items():
+            if df is not None and not df.empty: # Only write if DataFrame exists and is not empty
+                df.to_excel(writer, index=False, sheet_name=sheet_name)
+    processed_data = output.getvalue()
+    return processed_data
+
 # Set the title of the Streamlit app
 st.markdown(
     "<h2 style='text-align: left; color: black;'>AZD0120 VCN dPCR Analysis App beta v0.1</h2>",
     unsafe_allow_html=True
 )
 
-# Add a file uploader widget
-uploaded_file = st.file_uploader("Choose an csv file (.csv)", type=['csv'])
+# Add a file uploader widget for multiple files
+uploaded_files = st.file_uploader("Choose CSV files (.csv)", type=['csv'], accept_multiple_files=True, key=f"file_uploader_{st.session_state.get('uploader_key', 0)}")
 
-# If a file is uploaded
-if uploaded_file is not None:
-    # Store file identifier to detect new uploads
-    current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
-    if 'last_uploaded_file' not in st.session_state or st.session_state.last_uploaded_file != current_file_id:
-        st.session_state.last_uploaded_file = current_file_id
-        # Reset all session state related to calculations
-        st.session_state.user_cd19_inputs = {}    
-
-    # Robust CSV reading to handle optional 'sep=' line and different encodings
-    skiprows_val = 0
-    actual_sep = ','  # Default separator
-    first_line_str = None
-    df = None # Initialize df to None
-
-    encodings_to_try = ['utf-8', 'latin-1', 'utf-16']
-
-    # Try to read and decode the first line to check for 'sep='
-    for encoding in encodings_to_try:
-        try:
-            uploaded_file.seek(0)
-            first_line_bytes = uploaded_file.readline()
-            if not first_line_bytes: # Handle empty file case
-                st.error("Uploaded file is empty.")
-                st.stop() # Stop execution if file is empty
-            first_line_str = first_line_bytes.decode(encoding).strip()
-            break  # If decoding worked, break from loop
-        except UnicodeDecodeError:
-            continue # Try next encoding
-        except Exception as e:
-            st.error(f"Error reading the first line of the file with encoding {encoding}: {e}")
-            first_line_str = None # Ensure it's None if this attempt fails
-            # Continue to allow other encodings to be tried for the full read, or fail there.
+# Check if files have been uploaded
+if uploaded_files is not None and len(uploaded_files) > 0:
     
-    uploaded_file.seek(0) # Reset for the main read
+    # Initialize session state for storing all results
+    if 'all_files_results' not in st.session_state:
+        st.session_state.all_files_results = {}
+    
+    # Process each uploaded file
+    for file_index, uploaded_file in enumerate(uploaded_files):
+        
+        st.markdown(f"## Processing File {file_index + 1}: {uploaded_file.name}")
+        st.markdown("---")
+        
+        # Store file identifier to detect new uploads
+        current_file_id = f"{uploaded_file.name}_{uploaded_file.size}"
+        if 'last_uploaded_file' not in st.session_state or st.session_state.last_uploaded_file != current_file_id:
+            st.session_state.last_uploaded_file = current_file_id
+            # Reset all session state related to calculations
+            st.session_state.user_cd19_inputs = {}    
 
-    if first_line_str and first_line_str.lower().startswith("sep="):
-        skiprows_val = 1
-        # Determine the actual separator from the 'sep=' line
-        parts = first_line_str.split('=', 1) # Split only on the first '='
-        if len(parts) > 1 and parts[1]:
-            actual_sep = parts[1]
-            # Basic handling for common named separators or if it's just the character
-            if actual_sep.lower() == 'comma': actual_sep = ','
-            elif actual_sep.lower() == 'semicolon': actual_sep = ';'
-            elif actual_sep.lower() == 'tab': actual_sep = '\t'
-            # If actual_sep is already a single character like ',' or ';', it's fine.
-        else: # Default if 'sep=' is present but no char follows (e.g., "sep=\n")
-            actual_sep = ',' # Or consider error/warning
-    else: # No 'sep=' line found or error reading first line, assume header is on first line
+        # Robust CSV reading to handle optional 'sep=' line and different encodings
         skiprows_val = 0
-        actual_sep = ',' # Default to comma, or use None for auto-detection by pandas
+        actual_sep = ','  # Default separator
+        first_line_str = None
+        df = None # Initialize df to None
 
-    # Now, use these dynamic values in pd.read_csv
-    read_successful = False
-    for encoding in encodings_to_try:
-        try:
-            uploaded_file.seek(0) # Reset for each read attempt
-            df = pd.read_csv(uploaded_file, sep=actual_sep, header=0, skiprows=skiprows_val, encoding=encoding)
-            read_successful = True
-            break # Exit loop if read is successful
-        except UnicodeDecodeError:
-            continue # Try next encoding
-        except pd.errors.EmptyDataError:
-            st.error(f"The file appears to be empty or became empty after skipping rows with encoding {encoding}.")
-            df = pd.DataFrame() # Create an empty DataFrame
-            read_successful = True # Treat as "handled"
-            break
-        except Exception as e:
-            # Log error for this encoding, but allow trying others
-            st.warning(f"Could not parse CSV with encoding {encoding} and separator '{actual_sep}': {e}")
-            continue
+        encodings_to_try = ['utf-8', 'latin-1', 'utf-16']
+
+        # Try to read and decode the first line to check for 'sep='
+        for encoding in encodings_to_try:
+            try:
+                uploaded_file.seek(0)
+                first_line_bytes = uploaded_file.readline()
+                if not first_line_bytes: # Handle empty file case
+                    st.error(f"Uploaded file {uploaded_file.name} is empty.")
+                    break # Exit to next file
+                first_line_str = first_line_bytes.decode(encoding).strip()
+                break  # If decoding worked, break from loop
+            except UnicodeDecodeError:
+                continue # Try next encoding
+            except Exception as e:
+                st.error(f"Error reading the first line of file {uploaded_file.name} with encoding {encoding}: {e}")
+                first_line_str = None # Ensure it's None if this attempt fails
+                # Continue to allow other encodings to be tried for the full read, or fail there.
+        
+        if first_line_str is None:
+            continue # Skip to next file if we couldn't read the first line
             
-    if not read_successful:
-        st.error(f"Failed to read or parse the CSV file with all attempted encodings and separator '{actual_sep}'. Please check the file format.")
-        st.stop() # Stop execution if file cannot be read
-    
-    if df.empty and not read_successful: # Double check if df is empty due to read failure
-        st.error("Failed to load data into DataFrame. The DataFrame is empty.")
-        st.stop()
+        uploaded_file.seek(0) # Reset for the main read
 
-    # Rename the first column (which is unnamed) to "Well Position"
-    if "Unnamed: 0" in df.columns:
-        df.rename(columns={"Unnamed: 0": "Well Position"}, inplace=True)
+        if first_line_str and first_line_str.lower().startswith("sep="):
+            skiprows_val = 1
+            # Determine the actual separator from the 'sep=' line
+            parts = first_line_str.split('=', 1) # Split only on the first '='
+            if len(parts) > 1 and parts[1]:
+                actual_sep = parts[1]
+                # Basic handling for common named separators or if it's just the character
+                if actual_sep.lower() == 'comma': 
+                    actual_sep = ','
+                elif actual_sep.lower() == 'semicolon': 
+                    actual_sep = ';'
+                elif actual_sep.lower() == 'tab': 
+                    actual_sep = '\t'
+                # If actual_sep is already a single character like ',' or ';', it's fine.
+            else: # Default if 'sep=' is present but no char follows (e.g., "sep=\n")
+                actual_sep = ',' # Or consider error/warning
+        else: # No 'sep=' line found or error reading first line, assume header is on first line
+            skiprows_val = 0
+            actual_sep = ',' # Default to comma, or use None for auto-detection by pandas
 
-    # Strip whitespace from all column names (helps with hidden/extra spaces)
-    df.columns = df.columns.str.strip()
-
-    # Dynamically detect concentration column name
-    possible_conc_columns = ["Conc. [copies/µL]", "Conc. [cp/ÂµL] (dPCR reaction)"]
-    conc_col = next((col for col in possible_conc_columns if col in df.columns), None)
-    if conc_col is None:
-        st.error("No recognized concentration column found in CSV. Expected one of: 'Conc. [copies/µL]' or 'Conc. [cp/ÂµL] (dPCR reaction)'.")
-        st.stop()
-
-    # Dynamically detect target column name
-    possible_target_columns = ["Target", "Target (Name)"]
-    target_col = next((col for col in possible_target_columns if col in df.columns), None)
-    if target_col is None:
-        st.error("No recognized target column found in CSV. Expected one of: 'Target' or 'Target (Name)'.")
-        st.stop()
-
-    # Dynamically detect 'Partitions (Valid)' column
-    possible_valid_part_cols = ["Partitions (Valid)", "Partitions (valid)"]
-    valid_part_col = next((col for col in possible_valid_part_cols if col in df.columns), None)
-    if valid_part_col is None:
-        st.error("No recognized 'Partitions (Valid)' column found in CSV. Expected one of: 'Partitions (Valid)' or 'Partitions (valid)'.")
-        st.stop()
-
-    # Dynamically detect 'Partitions (Positive)' column
-    possible_positive_part_cols = ["Partitions (Positive)", "Partitions (positive)"]
-    positive_part_col = next((col for col in possible_positive_part_cols if col in df.columns), None)
-    if positive_part_col is None:
-        st.error("No recognized 'Partitions (Positive)' column found in CSV. Expected one of: 'Partitions (Positive)' or 'Partitions (positive)'.")
-        st.stop()
-
-    # Display the DataFrame
-# Assay Status Check based on NTC performance
-    assay_status_message = "Assay Status: Pass"
-    status_color = "green"
-    assay_failure_reasons = []
-
-    # --- Comprehensive Assay Status Checks ---
-
-    # 1. NTC Positive Partition Check
-    ntc_df = df[df["Sample/NTC/Control"].astype(str).str.startswith("NTC-")]
-    if ntc_df.empty:
-        assay_failure_reasons.append("NTC Check: No NTC samples found.")
-    else:
-        ntc_positive_parts = pd.to_numeric(ntc_df[positive_part_col], errors='coerce')
-        failing_ntcs = ntc_df[ntc_positive_parts > NTC_POS_PART_CUTOFF]
-        if not failing_ntcs.empty:
-            for _, row in failing_ntcs.iterrows():
-                reason = f"NTC Check: Sample '{row['Sample/NTC/Control']}' failed with {row[positive_part_col]} positive partitions (threshold: <= {NTC_POS_PART_CUTOFF})."
-                assay_failure_reasons.append(reason)
-
-    # 2. Valid Partitions Check for NTC & PC
-    pc_df = df[df["Sample/NTC/Control"].astype(str).str.startswith("PC-")]
-    control_samples_df = pd.concat([ntc_df, pc_df])
-    if control_samples_df.empty:
-        assay_failure_reasons.append("Partition Check: No NTC or PC samples found to check.")
-    else:
-        valid_partitions = pd.to_numeric(control_samples_df[valid_part_col], errors='coerce')
-        failing_partitions = control_samples_df[valid_partitions < MIN_VALID_PARTITION]
-        if not failing_partitions.empty:
-            for _, row in failing_partitions.iterrows():
-                reason = f"Partition Check: Sample '{row['Sample/NTC/Control']}' failed with {row[valid_part_col]} valid partitions (threshold: >= {MIN_VALID_PARTITION})."
-                assay_failure_reasons.append(reason)
-
-    # 3. PC %CV Checks
-    if pc_df.empty:
-        assay_failure_reasons.append("PC CV Check: No PC samples found.")
-    else:
-        # Create a pivot table for PC samples to calculate CV
-        pc_pivot = pc_df.pivot_table(index="Sample/NTC/Control", columns=target_col, values=conc_col).reset_index()
-        pc_pivot.rename(columns={"WPRE": "WPRE Concentration", "RPP30": "RPP30 Concentration"}, inplace=True)
+        # Now, use these dynamic values in pd.read_csv
+        read_successful = False
+        for encoding in encodings_to_try:
+            try:
+                uploaded_file.seek(0) # Reset for each read attempt
+                df = pd.read_csv(uploaded_file, sep=actual_sep, header=0, skiprows=skiprows_val, encoding=encoding)
+                read_successful = True
+                break # Exit loop if read is successful
+            except UnicodeDecodeError:
+                continue # Try next encoding
+            except pd.errors.EmptyDataError:
+                st.error(f"The file {uploaded_file.name} appears to be empty or became empty after skipping rows with encoding {encoding}.")
+                df = pd.DataFrame() # Create an empty DataFrame
+                read_successful = True # Treat as "handled"
+                break
+            except Exception as e:
+                # Log error for this encoding, but allow trying others
+                st.warning(f"Could not parse CSV {uploaded_file.name} with encoding {encoding} and separator '{actual_sep}': {e}")
+                continue
+                
+        if not read_successful:
+            st.error(f"Failed to read or parse the CSV file {uploaded_file.name} with all attempted encodings and separator '{actual_sep}'. Please check the file format.")
+            continue # Skip to next file
         
-        # Add a single 'Sample Group' for CV calculation across all PC replicates
-        pc_pivot['Sample Group'] = 'PC'
+        if df.empty: # Double check if df is empty due to read failure
+            st.error(f"Failed to load data into DataFrame for {uploaded_file.name}. The DataFrame is empty.")
+            continue # Skip to next file
 
-        # WPRE %CV for PC
-        if "WPRE Concentration" in pc_pivot.columns:
-            wpre_conc_pc = pd.to_numeric(pc_pivot["WPRE Concentration"], errors='coerce')
-            if len(wpre_conc_pc.dropna()) > 1: # Need at least 2 values for std dev
-                wpre_mean_pc = wpre_conc_pc.mean()
-                wpre_std_pc = wpre_conc_pc.std()
-                wpre_cv_pc = (wpre_std_pc / wpre_mean_pc) * 100 if wpre_mean_pc != 0 else 0
-                if wpre_cv_pc > MAX_CV_PERCENTAGE:
-                    assay_failure_reasons.append(f"PC CV Check: WPRE Concentration %CV is {wpre_cv_pc:.2f}% (threshold: <= {MAX_CV_PERCENTAGE}%).")
-            else:
-                 assay_failure_reasons.append("PC CV Check: Not enough PC WPRE data points to calculate %CV.")
+        # Rename the first column (which is unnamed) to "Well Position"
+        if "Unnamed: 0" in df.columns:
+            df.rename(columns={"Unnamed: 0": "Well Position"}, inplace=True)
+
+        # Strip whitespace from all column names (helps with hidden/extra spaces)
+        df.columns = df.columns.str.strip()
+
+        # Dynamically detect concentration column name
+        possible_conc_columns = ["Conc. [copies/µL]", "Conc. [cp/ÂµL] (dPCR reaction)"]
+        conc_col = next((col for col in possible_conc_columns if col in df.columns), None)
+        if conc_col is None:
+            st.error(f"No recognized concentration column found in CSV {uploaded_file.name}. Expected one of: 'Conc. [copies/µL]' or 'Conc. [cp/ÂµL] (dPCR reaction)'.")
+            continue # Skip to next file
+
+        # Dynamically detect target column name
+        possible_target_columns = ["Target", "Target (Name)"]
+        target_col = next((col for col in possible_target_columns if col in df.columns), None)
+        if target_col is None:
+            st.error(f"No recognized target column found in CSV {uploaded_file.name}. Expected one of: 'Target' or 'Target (Name)'.")
+            continue # Skip to next file
+
+        # Dynamically detect 'Partitions (Valid)' column
+        possible_valid_part_cols = ["Partitions (Valid)", "Partitions (valid)"]
+        valid_part_col = next((col for col in possible_valid_part_cols if col in df.columns), None)
+        if valid_part_col is None:
+            st.error(f"No recognized 'Partitions (Valid)' column found in CSV {uploaded_file.name}. Expected one of: 'Partitions (Valid)' or 'Partitions (valid)'.")
+            continue # Skip to next file
+
+        # Dynamically detect 'Partitions (Positive)' column
+        possible_positive_part_cols = ["Partitions (Positive)", "Partitions (positive)"]
+        positive_part_col = next((col for col in possible_positive_part_cols if col in df.columns), None)
+        if positive_part_col is None:
+            st.error(f"No recognized 'Partitions (Positive)' column found in CSV {uploaded_file.name}. Expected one of: 'Partitions (Positive)' or 'Partitions (positive)'.")
+            continue # Skip to next file
         
-        # RPP30 %CV for PC
-        if "RPP30 Concentration" in pc_pivot.columns:
-            rpp30_conc_pc = pd.to_numeric(pc_pivot["RPP30 Concentration"], errors='coerce')
-            if len(rpp30_conc_pc.dropna()) > 1:
-                rpp30_mean_pc = rpp30_conc_pc.mean()
-                rpp30_std_pc = rpp30_conc_pc.std()
-                rpp30_cv_pc = (rpp30_std_pc / rpp30_mean_pc) * 100 if rpp30_mean_pc != 0 else 0
-                if rpp30_cv_pc > MAX_CV_PERCENTAGE:
-                    assay_failure_reasons.append(f"PC CV Check: RPP30 Concentration %CV is {rpp30_cv_pc:.2f}% (threshold: <= {MAX_CV_PERCENTAGE}%).")
-            else:
-                assay_failure_reasons.append("PC CV Check: Not enough PC RPP30 data points to calculate %CV.")
+        # Assay Status Check based on NTC performance
+        assay_status_message = "Assay Status: Pass"
+        status_color = "green"
+        assay_failure_reasons = []
 
-    # Finalize Status
-    if assay_failure_reasons:
-        assay_status_message = "Assay Status: Fail"
-        status_color = "red"
+        # --- Comprehensive Assay Status Checks ---
 
-    st.markdown(f"<h4 style='color: {status_color};'>{assay_status_message}</h4>", unsafe_allow_html=True)
-
-    # Always display the criteria in an expander
-    with st.expander("View Assay Status Criteria"):
-        if not assay_failure_reasons:
-            st.success("All assay status checks passed (NTC Partitions, Control Valid Partitions, PC %CV).")
+        # 1. NTC Positive Partition Check
+        ntc_df = df[df["Sample/NTC/Control"].astype(str).str.startswith("NTC-")]
+        if ntc_df.empty:
+            assay_failure_reasons.append("NTC Check: No NTC samples found.")
         else:
-            for reason in assay_failure_reasons:
-                st.error(reason)
-    # Display threshold values used in analysis
-    st.write('**Thresholds Used in Analysis:**')
-    st.write(f"MIN_VALID_PARTITION: {MIN_VALID_PARTITION}")
-    st.write(f"NTC_POS_PART_CUTOFF: {NTC_POS_PART_CUTOFF}")
-    st.write(f"MAX_CV_PERCENTAGE: {MAX_CV_PERCENTAGE}%")
-    st.write(f"LLOQ_WPRE_COPIES_UL: {LLOQ_WPRE_COPIES_UL}")
-    st.write(f"LLOQ_RPP30_COPIES_UL: {LLOQ_RPP30_COPIES_UL}")
-    st.write(f"CAR_PC_MIN_COPY_NUMBER_CELL: {CAR_PC_MIN_COPY_NUMBER_CELL}")
-    st.write(f"CAR_PC_MAX_COPY_NUMBER_CELL: {CAR_PC_MAX_COPY_NUMBER_CELL}")
-    st.markdown("---") # Add a horizontal line for separation
-    with st.expander("CSV Uploaded Table", expanded=False):
-        st.dataframe(df)
+            ntc_positive_parts = pd.to_numeric(ntc_df[positive_part_col], errors='coerce')
+            failing_ntcs = ntc_df[ntc_positive_parts > NTC_POS_PART_CUTOFF]
+            if not failing_ntcs.empty:
+                for _, row in failing_ntcs.iterrows():
+                    reason = f"NTC Check: Sample '{row['Sample/NTC/Control']}' failed with {row[positive_part_col]} positive partitions (threshold: <= {NTC_POS_PART_CUTOFF})."
+                    assay_failure_reasons.append(reason)
 
-    st.subheader("Summary Table")
-    # Create the summary DataFrame using pivot_table
-    # Ensure the column names match exactly what's in your df after previous processing
-    # Based on your CSV output: "Sample/NTC/Control", "Target", "Conc. [copies/µL]"
-    
-    # Check if necessary columns exist before pivoting
-    required_cols_for_pivot = ["Sample/NTC/Control", target_col, conc_col]
-    if all(col in df.columns for col in required_cols_for_pivot):
-        try:
-            summary_df = df.pivot_table(
-                index="Sample/NTC/Control",
-                columns=target_col,
-                values=conc_col
-            ).reset_index() # Convert index "Sample/NTC/Control" back to a column
+        # 2. Valid Partitions Check for NTC & PC
+        pc_df = df[df["Sample/NTC/Control"].astype(str).str.startswith("PC-")]
+        control_samples_df = pd.concat([ntc_df, pc_df])
+        if control_samples_df.empty:
+            assay_failure_reasons.append("Partition Check: No NTC or PC samples found to check.")
+        else:
+            valid_partitions = pd.to_numeric(control_samples_df[valid_part_col], errors='coerce')
+            failing_partitions = control_samples_df[valid_partitions < MIN_VALID_PARTITION]
+            if not failing_partitions.empty:
+                for _, row in failing_partitions.iterrows():
+                    reason = f"Partition Check: Sample '{row['Sample/NTC/Control']}' failed with {row[valid_part_col]} valid partitions (threshold: >= {MIN_VALID_PARTITION})."
+                    assay_failure_reasons.append(reason)
 
-            # Rename columns for the final summary table
-            summary_df.rename(columns={
-                "Sample/NTC/Control": "Sample ID",
-                "WPRE": "WPRE Concentration",  # Assuming "WPRE" is a value in "Target" column
-                "RPP30": "RPP30 Concentration" # Assuming "RPP30" is a value in "Target" column
-            }, inplace=True)
-# Remove NTC samples from the summary table
-            summary_df = summary_df[~summary_df["Sample ID"].astype(str).str.startswith("NTC")]
+        # 3. PC %CV Checks
+        if pc_df.empty:
+            assay_failure_reasons.append("PC CV Check: No PC samples found.")
+        else:
+            # Create a pivot table for PC samples to calculate CV
+            pc_pivot = pc_df.pivot_table(index="Sample/NTC/Control", columns=target_col, values=conc_col).reset_index()
+            pc_pivot.rename(columns={"WPRE": "WPRE Concentration", "RPP30": "RPP30 Concentration"}, inplace=True)
+            
+            # Add a single 'Sample Group' for CV calculation across all PC replicates
+            pc_pivot['Sample Group'] = 'PC'
 
-            # Calculate "Copy number/cell"
-            # Ensure both concentration columns exist before attempting calculation
-            if "WPRE Concentration" in summary_df.columns and "RPP30 Concentration" in summary_df.columns:
-                # Convert columns to numeric, coercing errors to NaN. This helps if they are not already numeric.
-                wpre_conc = pd.to_numeric(summary_df["WPRE Concentration"], errors='coerce')
-                rpp30_conc = pd.to_numeric(summary_df["RPP30 Concentration"], errors='coerce')
-                
-                # Perform calculation, using np.isclose for floating-point comparison
-                summary_df["Copy number/cell"] = np.where(
-                    (np.isclose(rpp30_conc, 0, atol=1e-10)) | (rpp30_conc.isna()),
-                    np.nan,  # Result is NaN if RPP30 is 0 or NaN
-                    (wpre_conc / rpp30_conc) * 2
-                )
-            else:
-                # If one of the concentration columns is missing, create the "Copy number/cell" column with NaNs
-                summary_df["Copy number/cell"] = np.nan
-
-            # Calculate %CV for WPRE and RPP30 Concentrations
-            if "Sample ID" in summary_df.columns:
-                # Extract Sample Group (part before '-')
-                summary_df['Sample Group'] = summary_df['Sample ID'].astype(str).str.split('-').str[0]
-                # Calculate Average "Copy number/cell" per Sample Group
-                if "Copy number/cell" in summary_df.columns:
-                    # Ensure "Copy number/cell" is numeric for the mean calculation
-                    copy_number_cell_numeric = pd.to_numeric(summary_df["Copy number/cell"], errors='coerce')
-                    summary_df["Avg CnC per Group"] = copy_number_cell_numeric.groupby(summary_df['Sample Group']).transform('mean')
+            # WPRE %CV for PC
+            if "WPRE Concentration" in pc_pivot.columns:
+                wpre_conc_pc = pd.to_numeric(pc_pivot["WPRE Concentration"], errors='coerce')
+                if len(wpre_conc_pc.dropna()) > 1: # Need at least 2 values for std dev
+                    wpre_mean_pc = wpre_conc_pc.mean()
+                    wpre_std_pc = wpre_conc_pc.std()
+                    wpre_cv_pc = (wpre_std_pc / wpre_mean_pc) * 100 if wpre_mean_pc != 0 else 0
+                    if wpre_cv_pc > MAX_CV_PERCENTAGE:
+                        assay_failure_reasons.append(f"PC CV Check: WPRE Concentration %CV is {wpre_cv_pc:.2f}% (threshold: <= {MAX_CV_PERCENTAGE}%).")
                 else:
-                    # If "Copy number/cell" column doesn't exist, fill "Avg CnC per Group" with NaN
-                    summary_df["Avg CnC per Group"] = np.nan
-                # User input for %CD19
-                st.subheader("Enter %CD19 Values")
-                # Get unique sample groups from the current summary_df and sort them for consistent display order
-                unique_sample_groups = sorted(list(summary_df['Sample Group'].unique()))
+                     assay_failure_reasons.append("PC CV Check: Not enough PC WPRE data points to calculate %CV.")
+            
+            # RPP30 %CV for PC
+            if "RPP30 Concentration" in pc_pivot.columns:
+                rpp30_conc_pc = pd.to_numeric(pc_pivot["RPP30 Concentration"], errors='coerce')
+                if len(rpp30_conc_pc.dropna()) > 1:
+                    rpp30_mean_pc = rpp30_conc_pc.mean()
+                    rpp30_std_pc = rpp30_conc_pc.std()
+                    rpp30_cv_pc = (rpp30_std_pc / rpp30_mean_pc) * 100 if rpp30_mean_pc != 0 else 0
+                    if rpp30_cv_pc > MAX_CV_PERCENTAGE:
+                        assay_failure_reasons.append(f"PC CV Check: RPP30 Concentration %CV is {rpp30_cv_pc:.2f}% (threshold: <= {MAX_CV_PERCENTAGE}%).")
+                else:
+                    assay_failure_reasons.append("PC CV Check: Not enough PC RPP30 data points to calculate %CV.")
 
-                # Initialize session state for CD19 inputs if it doesn't exist
-                if 'user_cd19_inputs' not in st.session_state:
-                    st.session_state.user_cd19_inputs = {}
+        # Finalize Status
+        if assay_failure_reasons:
+            assay_status_message = "Assay Status: Fail"
+            status_color = "red"
 
-                # Always reset CD19 values for new file uploads
-                st.session_state.user_cd19_inputs = {}
-                
-                # Initialize with 0.0 for all groups
-                for group in unique_sample_groups:
-                    st.session_state.user_cd19_inputs[group] = 0.0
-                
-                # Create input fields for each unique sample group
-                for group in unique_sample_groups:
-                    # Each input widget needs a unique and stable key
-                    input_key = f"cd19_input_for_group_{group}"
+        st.markdown(f"<h4 style='color: {status_color};'>{assay_status_message}</h4>", unsafe_allow_html=True)
+
+        # Always display the criteria in an expander
+        with st.expander("View Assay Status Criteria"):
+            if not assay_failure_reasons:
+                st.success("All assay status checks passed (NTC Partitions, Control Valid Partitions, PC %CV).")
+            else:
+                for reason in assay_failure_reasons:
+                    st.error(reason)
                     
-                    user_input = st.number_input(
-                        label=f"%CD19 for Sample Group '{group}'",
-                        min_value=0.0,
-                        max_value=100.0,
-                        value=st.session_state.user_cd19_inputs.get(group, 0.0), # Use value from session state or default
-                        step=0.1,
-                        key=input_key,
-                        help="Enter the percentage of CD19 positive cells (0.0-100.0)."
+        # Display threshold values used in analysis
+        st.write('**Thresholds Used in Analysis:**')
+        st.write(f"MIN_VALID_PARTITION: {MIN_VALID_PARTITION}")
+        st.write(f"NTC_POS_PART_CUTOFF: {NTC_POS_PART_CUTOFF}")
+        st.write(f"MAX_CV_PERCENTAGE: {MAX_CV_PERCENTAGE}%")
+        st.write(f"LLOQ_WPRE_COPIES_UL: {LLOQ_WPRE_COPIES_UL}")
+        st.write(f"LLOQ_RPP30_COPIES_UL: {LLOQ_RPP30_COPIES_UL}")
+        st.write(f"CAR_PC_MIN_COPY_NUMBER_CELL: {CAR_PC_MIN_COPY_NUMBER_CELL}")
+        st.write(f"CAR_PC_MAX_COPY_NUMBER_CELL: {CAR_PC_MAX_COPY_NUMBER_CELL}")
+        st.markdown("---") # Add a horizontal line for separation
+        with st.expander("CSV Uploaded Table", expanded=False):
+            st.dataframe(df)
+
+        st.subheader("Summary Table")
+        # Create the summary DataFrame using pivot_table
+        # Ensure the column names match exactly what's in your df after previous processing
+        # Based on your CSV output: "Sample/NTC/Control", "Target", "Conc. [copies/µL]"
+        
+        # Check if necessary columns exist before pivoting
+        required_cols_for_pivot = ["Sample/NTC/Control", target_col, conc_col]
+        if all(col in df.columns for col in required_cols_for_pivot):
+            try:
+                summary_df = df.pivot_table(
+                    index="Sample/NTC/Control",
+                    columns=target_col,
+                    values=conc_col
+                ).reset_index() # Convert index "Sample/NTC/Control" back to a column
+
+                # Rename columns for the final summary table
+                summary_df.rename(columns={
+                    "Sample/NTC/Control": "Sample ID",
+                    "WPRE": "WPRE Concentration",  # Assuming "WPRE" is a value in "Target" column
+                    "RPP30": "RPP30 Concentration" # Assuming "RPP30" is a value in "Target" column
+                }, inplace=True)
+                
+                # Remove NTC samples from the summary table
+                summary_df = summary_df[~summary_df["Sample ID"].astype(str).str.startswith("NTC")]
+
+                # Calculate "Copy number/cell"
+                # Ensure both concentration columns exist before attempting calculation
+                if "WPRE Concentration" in summary_df.columns and "RPP30 Concentration" in summary_df.columns:
+                    # Convert columns to numeric, coercing errors to NaN. This helps if they are not already numeric.
+                    wpre_conc = pd.to_numeric(summary_df["WPRE Concentration"], errors='coerce')
+                    rpp30_conc = pd.to_numeric(summary_df["RPP30 Concentration"], errors='coerce')
+                    
+                    # Perform calculation, using np.isclose for floating-point comparison
+                    summary_df["Copy number/cell"] = np.where(
+                        (np.isclose(rpp30_conc, 0, atol=1e-10)) | (rpp30_conc.isna()),
+                        np.nan,  # Result is NaN if RPP30 is 0 or NaN
+                        (wpre_conc / rpp30_conc) * 2
                     )
-                    # Update session state immediately as user types
-                    st.session_state.user_cd19_inputs[group] = user_input
+                else:
+                    # If one of the concentration columns is missing, create the "Copy number/cell" column with NaNs
+                    summary_df["Copy number/cell"] = np.nan
 
-                # Map the collected user inputs to the summary_df
-                # .get(group, np.nan) could be used if we wanted a non-entered field to be NaN by default
-                # but since we default to 0 in session_state, this will map those 0s.
-                # .fillna(np.nan) handles any sample groups in df not covered by inputs (should not happen here).
-                summary_df["User input %CD19"] = summary_df['Sample Group'].map(st.session_state.user_cd19_inputs).fillna(np.nan)
-
-                # WPRE Concentration %CV
-                if "WPRE Concentration" in summary_df.columns:
-                    wpre_conc_numeric = pd.to_numeric(summary_df["WPRE Concentration"], errors='coerce')
-                    grouped_wpre_mean = wpre_conc_numeric.groupby(summary_df['Sample Group']).transform('mean')
-                    grouped_wpre_std = wpre_conc_numeric.groupby(summary_df['Sample Group']).transform('std')
+                # Calculate %CV for WPRE and RPP30 Concentrations
+                if "Sample ID" in summary_df.columns:
+                    # Extract Sample Group (part before '-')
+                    summary_df['Sample Group'] = summary_df['Sample ID'].astype(str).str.split('-').str[0]
                     
-                    summary_df["WPRE Concentration %CV"] = np.where(
-                        (np.isclose(grouped_wpre_mean, 0, atol=1e-10)) | grouped_wpre_mean.isna() | grouped_wpre_std.isna(),
-                        np.nan, # %CV is NaN if mean is 0, or std is NaN (e.g. single sample group)
-                        (grouped_wpre_std / grouped_wpre_mean) * 100
-                    ).round(2)
+                    # WPRE Concentration %CV
+                    if "WPRE Concentration" in summary_df.columns:
+                        wpre_conc_numeric = pd.to_numeric(summary_df["WPRE Concentration"], errors='coerce')
+                        grouped_wpre_mean = wpre_conc_numeric.groupby(summary_df['Sample Group']).transform('mean')
+                        grouped_wpre_std = wpre_conc_numeric.groupby(summary_df['Sample Group']).transform('std')
+                        
+                        summary_df["WPRE Concentration %CV"] = np.where(
+                            (np.isclose(grouped_wpre_mean, 0, atol=1e-10)) | grouped_wpre_mean.isna() | grouped_wpre_std.isna(),
+                            np.nan, # %CV is NaN if mean is 0, or std is NaN (e.g. single sample group)
+                            (grouped_wpre_std / grouped_wpre_mean) * 100
+                        ).round(2)
+                    else:
+                        summary_df["WPRE Concentration %CV"] = np.nan
+
+                    # RPP30 Concentration %CV
+                    if "RPP30 Concentration" in summary_df.columns:
+                        rpp30_conc_numeric = pd.to_numeric(summary_df["RPP30 Concentration"], errors='coerce')
+                        grouped_rpp30_mean = rpp30_conc_numeric.groupby(summary_df['Sample Group']).transform('mean')
+                        grouped_rpp30_std = rpp30_conc_numeric.groupby(summary_df['Sample Group']).transform('std')
+
+                        summary_df["RPP30 Concentration %CV"] = np.where(
+                            (np.isclose(grouped_rpp30_mean, 0, atol=1e-10)) | grouped_rpp30_mean.isna() | grouped_rpp30_std.isna(),
+                            np.nan, # %CV is NaN if mean is 0, or std is NaN
+                            (grouped_rpp30_std / grouped_rpp30_mean) * 100
+                        ).round(2)
+                    else:
+                        summary_df["RPP30 Concentration %CV"] = np.nan
                 else:
                     summary_df["WPRE Concentration %CV"] = np.nan
-
-                # RPP30 Concentration %CV
-                if "RPP30 Concentration" in summary_df.columns:
-                    rpp30_conc_numeric = pd.to_numeric(summary_df["RPP30 Concentration"], errors='coerce')
-                    grouped_rpp30_mean = rpp30_conc_numeric.groupby(summary_df['Sample Group']).transform('mean')
-                    grouped_rpp30_std = rpp30_conc_numeric.groupby(summary_df['Sample Group']).transform('std')
-
-                    summary_df["RPP30 Concentration %CV"] = np.where(
-                        (np.isclose(grouped_rpp30_mean, 0, atol=1e-10)) | grouped_rpp30_mean.isna() | grouped_rpp30_std.isna(),
-                        np.nan, # %CV is NaN if mean is 0, or std is NaN
-                        (grouped_rpp30_std / grouped_rpp30_mean) * 100
-                    ).round(2)
-                else:
                     summary_df["RPP30 Concentration %CV"] = np.nan
-                
-                # Drop the temporary Sample Group column if no longer needed for display
-                # summary_df.drop(columns=['Sample Group'], inplace=True) # Or keep it if useful
-            else:
-                summary_df["WPRE Concentration %CV"] = np.nan
-                summary_df["RPP30 Concentration %CV"] = np.nan
 
-            # Calculate "Average copy number/transduced cell"
-            if "Avg CnC per Group" in summary_df.columns and "User input %CD19" in summary_df.columns:
-                # Ensure inputs are numeric for calculation
-                avg_cnc_group = pd.to_numeric(summary_df["Avg CnC per Group"], errors='coerce')
-                user_input_cd19 = pd.to_numeric(summary_df["User input %CD19"], errors='coerce')
-
-                # Condition for "N/A": CD19 input is 0 or NaN, or Avg CnC per Group is NaN
-                condition_na = (np.isclose(user_input_cd19, 0, atol=1e-10)) | user_input_cd19.isna() | avg_cnc_group.isna()
-                
-                # Initialize with np.nan for numeric calculations
-                avg_copy_transduced_cell_values = np.full(len(summary_df), np.nan, dtype=float)
-                
-                # Indices where calculation is possible
-                valid_indices = ~condition_na
-                
-                if np.any(valid_indices): # Check if there are any valid entries to calculate
-                    # Perform calculation only for valid indices
-                    avg_copy_transduced_cell_values[valid_indices] = (
-                        avg_cnc_group[valid_indices] / (user_input_cd19[valid_indices] / 100.0)
+                # For simplicity in multiple file mode, set default values for user inputs
+                summary_df["User input %CD19"] = 0.0
+                summary_df["Average copy number/transduced cell"] = "N/A"
+                    
+                # Calculate Designation
+                if not summary_df.empty and 'Sample Group' in summary_df.columns and df is not None and not df.empty:
+                    # Ensure original_df (df) has 'Sample Group' if it's derived from 'Sample/NTC/Control'
+                    if 'Sample Group' not in df.columns and 'Sample/NTC/Control' in df.columns:
+                        df_copy = df.copy() # Work on a copy to avoid modifying original df in this scope
+                        df_copy['Sample Group'] = df_copy['Sample/NTC/Control'].astype(str).str.split('-').str[0]
+                    elif 'Sample Group' in df.columns:
+                        df_copy = df.copy()
+                    else: # If 'Sample Group' cannot be derived or found in df
+                        st.warning("Could not ensure 'Sample Group' in original data for Designation. Designation might be inaccurate.")
+                        df_copy = df.copy() # Proceed with a copy, function will handle missing 'Sample Group'
+                    
+                    summary_df = add_designation_column(
+                        summary_df, df_copy,
+                        MIN_VALID_PARTITION, NTC_POS_PART_CUTOFF, MAX_CV_PERCENTAGE,
+                        LLOQ_WPRE_COPIES_UL, LLOQ_RPP30_COPIES_UL
                     )
-                    # Round the calculated numeric values
-                    avg_copy_transduced_cell_values[valid_indices] = np.round(avg_copy_transduced_cell_values[valid_indices], 2)
-
-                # Now, create the final column, converting np.nan to "N/A" string where appropriate
-                summary_df["Average copy number/transduced cell"] = "N/A" # Default to "N/A"
-                # Assign calculated rounded values where valid_indices are true
-                summary_df.loc[valid_indices, "Average copy number/transduced cell"] = avg_copy_transduced_cell_values[valid_indices]
-                # Ensure that any original condition_na explicitly results in "N/A"
-                summary_df.loc[condition_na, "Average copy number/transduced cell"] = "N/A"
-            else:
-                summary_df["Average copy number/transduced cell"] = "N/A" # Default if precursor columns are missing
-            # Calculate Designation
-            if not summary_df.empty and 'Sample Group' in summary_df.columns and df is not None and not df.empty:
-                # Ensure original_df (df) has 'Sample Group' if it's derived from 'Sample/NTC/Control'
-                if 'Sample Group' not in df.columns and 'Sample/NTC/Control' in df.columns:
-                    df_copy = df.copy() # Work on a copy to avoid modifying original df in this scope
-                    df_copy['Sample Group'] = df_copy['Sample/NTC/Control'].astype(str).str.split('-').str[0]
-                elif 'Sample Group' in df.columns:
-                    df_copy = df.copy()
-                else: # If 'Sample Group' cannot be derived or found in df
-                    st.warning("Could not ensure 'Sample Group' in original data for Designation. Designation might be inaccurate.")
-                    df_copy = df.copy() # Proceed with a copy, function will handle missing 'Sample Group'
+                else:
+                    # If summary_df or original df is empty, or other issues, set defaults
+                    summary_df["Designation"] = "Fail" # Default to Fail
+                    summary_df["Designation Summary"] = "Default Fail"
                 
-                summary_df = add_designation_column(
-                    summary_df, df_copy,
-                    MIN_VALID_PARTITION, NTC_POS_PART_CUTOFF, MAX_CV_PERCENTAGE,
-                    LLOQ_WPRE_COPIES_UL, LLOQ_RPP30_COPIES_UL
-                )
-            else:
-                # If summary_df or original df is empty, or other issues, set defaults
-                summary_df["Designation"] = "Fail" # Default to Fail
-                helper_cols_for_empty_df = [
+                # Define helper columns to drop after calculations are done
+                helper_columns_to_drop = [
                     'is_wpre_cv_ok', 'is_rpp30_cv_ok', 'is_partitions_valid_ok',
-                    'is_wpre_lloq_ok', 'is_rpp30_lloq_ok'
+                    'is_wpre_lloq_ok', 'is_rpp30_lloq_ok',
                 ]
-                for col_name in helper_cols_for_empty_df:
-                    if col_name not in summary_df.columns: # Add if missing
-                       summary_df[col_name] = False # Default to False
-            
-            # Define helper columns to drop after calculations are done
-            helper_columns_to_drop = [
-                'is_wpre_cv_ok', 'is_rpp30_cv_ok', 'is_partitions_valid_ok',
-                'is_wpre_lloq_ok', 'is_rpp30_lloq_ok',
-                # 'Sample ID Key' # Uncomment if 'Sample ID Key' should also be dropped
-            ]
-            # Drop helper columns if they exist, ignore errors if they don't
-            summary_df.drop(columns=[col for col in helper_columns_to_drop if col in summary_df.columns], inplace=True, errors='ignore')
+                # Drop helper columns if they exist, ignore errors if they don't
+                summary_df.drop(columns=[col for col in helper_columns_to_drop if col in summary_df.columns], inplace=True, errors='ignore')
 
-            # Select and reorder columns for the final display
-            final_columns = ["Sample ID"]
-            required_columns = {
-                "WPRE Concentration": "WPRE Concentration",
-                "RPP30 Concentration": "RPP30 Concentration", 
-                "Copy number/cell": "Copy number/cell",
-                "User input %CD19": "User input %CD19",
-                "Average copy number/transduced cell": "Average copy number/transduced cell",
-                "WPRE Concentration %CV": "WPRE Concentration %CV",
-                "RPP30 Concentration %CV": "RPP30 Concentration %CV",
-                "Designation": "Designation",
-                "Designation Summary": "Designation Summary"
+                # Select and reorder columns for the final display
+                final_columns = ["Sample ID"]
+                required_columns = {
+                    "WPRE Concentration": "WPRE Concentration",
+                    "RPP30 Concentration": "RPP30 Concentration", 
+                    "Copy number/cell": "Copy number/cell",
+                    "User input %CD19": "User input %CD19",
+                    "Average copy number/transduced cell": "Average copy number/transduced cell",
+                    "WPRE Concentration %CV": "WPRE Concentration %CV",
+                    "RPP30 Concentration %CV": "RPP30 Concentration %CV",
+                    "Designation": "Designation",
+                    "Designation Summary": "Designation Summary"
+                }
+                
+                # Add columns that exist in the dataframe
+                for col_key, col_name in required_columns.items():
+                    if col_key in summary_df.columns:
+                        final_columns.append(col_name)
+                
+                # Ensure only existing columns are selected and dataframe is not empty
+                existing_columns = [col for col in final_columns if col in summary_df.columns]
+                if existing_columns:
+                    summary_df = summary_df[existing_columns]
+
+                # Convert 'Average copy number/transduced cell' to string to handle "N/A" for display
+                if "Average copy number/transduced cell" in summary_df.columns:
+                    summary_df["Average copy number/transduced cell"] = summary_df["Average copy number/transduced cell"].astype(str)
+                st.dataframe(summary_df)
+
+                # Store results for this file
+                st.session_state.all_files_results[uploaded_file.name] = {
+                    'summary_df': summary_df.copy(),
+                    'original_df': df.copy(),
+                    'assay_status_message': assay_status_message,
+                    'assay_failure_reasons': assay_failure_reasons.copy()
+                }
+            except Exception as e:
+                st.error(f"Error creating summary table for {uploaded_file.name}: {e}")
+                st.write("Please ensure the CSV contains 'Sample/NTC/Control', a target column ('Target' or 'Target (Name)'), and a concentration column ('Conc. [copies/µL]' or 'Conc. [cp/ÂµL] (dPCR reaction)') and that the target column contains 'WPRE' and 'RPP30' values.")
+        else:
+            st.warning(f"Could not create summary table for {uploaded_file.name}. Required columns ('Sample/NTC/Control', a target column ['Target' or 'Target (Name)'], and a concentration column ['Conc. [copies/µL]' or 'Conc. [cp/ÂµL] (dPCR reaction)']) not found in the uploaded CSV.")
+
+    # --- Combined Export Results Section for All Files ---
+    if st.session_state.get('all_files_results', {}):
+        st.markdown("---")
+        st.header("📊 Combined Results from All Files")
+        
+        # Display summary of all processed files
+        st.subheader("Files Processed:")
+        for filename, results in st.session_state.all_files_results.items():
+            status_color = "green" if "Pass" in results['assay_status_message'] else "red"
+            st.markdown(f"- **{filename}**: <span style='color: {status_color};'>{results['assay_status_message']}</span>", unsafe_allow_html=True)
+        
+        st.markdown("---")
+        st.header("Export Combined Results")
+
+        # Prepare combined data for multi-sheet Excel
+        combined_data_to_export = {}
+        
+        # Combine Summary Results from all files
+        all_summary_data = []
+        all_raw_data = []
+        all_assay_status_data = []
+        
+        for filename, results in st.session_state.all_files_results.items():
+            # Add filename column to distinguish data from different files
+            summary_with_file = results['summary_df'].copy()
+            summary_with_file['Source_File'] = filename
+            all_summary_data.append(summary_with_file)
+            
+            raw_with_file = results['original_df'].copy()
+            raw_with_file['Source_File'] = filename
+            all_raw_data.append(raw_with_file)
+            
+            # Create assay status data for this file
+            assay_status_row = {
+                'Source_File': filename,
+                'Assay_Status': results['assay_status_message'].replace("Assay Status: ", ""),
+                'Failure_Reasons': "; ".join(results['assay_failure_reasons']) if results['assay_failure_reasons'] else "None",
+                'Analysis_Timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'MIN_VALID_PARTITION': MIN_VALID_PARTITION,
+                'NTC_POS_PART_CUTOFF': NTC_POS_PART_CUTOFF,
+                'MAX_CV_PERCENTAGE': MAX_CV_PERCENTAGE,
+                'LLOQ_WPRE_COPIES_UL': LLOQ_WPRE_COPIES_UL,
+                'LLOQ_RPP30_COPIES_UL': LLOQ_RPP30_COPIES_UL,
+                'CAR_PC_MIN_COPY_NUMBER_CELL': CAR_PC_MIN_COPY_NUMBER_CELL,
+                'CAR_PC_MAX_COPY_NUMBER_CELL': CAR_PC_MAX_COPY_NUMBER_CELL
             }
+            all_assay_status_data.append(assay_status_row)
+        
+        # Create combined DataFrames
+        if all_summary_data:
+            combined_summary_df = pd.concat(all_summary_data, ignore_index=True)
+            combined_data_to_export['Combined_Summary'] = combined_summary_df
+        
+        if all_raw_data:
+            combined_raw_df = pd.concat(all_raw_data, ignore_index=True)
+            combined_data_to_export['Combined_Raw_Data'] = combined_raw_df
             
-            # Add columns that exist in the dataframe
-            for col_key, col_name in required_columns.items():
-                if col_key in summary_df.columns:
-                    final_columns.append(col_name)
-            
-            # Ensure only existing columns are selected and dataframe is not empty
-            existing_columns = [col for col in final_columns if col in summary_df.columns]
-            if existing_columns:
-                summary_df = summary_df[existing_columns]
+        if all_assay_status_data:
+            combined_assay_status_df = pd.DataFrame(all_assay_status_data)
+            combined_data_to_export['Assay_Status'] = combined_assay_status_df
 
-# Convert 'Average copy number/transduced cell' to string to handle "N/A" for display
-            if "Average copy number/transduced cell" in summary_df.columns:
-                summary_df["Average copy number/transduced cell"] = summary_df["Average copy number/transduced cell"].astype(str)
-            st.dataframe(summary_df)
-
-            # --- Export Summary Table as Excel ---
-            excel_buffer = io.BytesIO()
-            summary_df.to_excel(excel_buffer, index=False)
-            excel_buffer.seek(0)
+        if combined_data_to_export:
+            # Export combined Excel file
+            excel_bytes = dfs_to_excel_bytes(combined_data_to_export)
             timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"Summary_Table_{timestamp}.xlsx"
+            combined_filename = f"Combined_AZD0120_Analysis_{timestamp}.xlsx"
+            
             st.download_button(
-                label="Export Summary Table as Excel",
-                data=excel_buffer,
-                file_name=filename,
+                label="📥 Download Combined Excel Report",
+                data=excel_bytes,
+                file_name=combined_filename,
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-        except Exception as e:
-            st.error(f"Error creating summary table: {e}")
-            st.write("Please ensure the CSV contains 'Sample/NTC/Control', a target column ('Target' or 'Target (Name)'), and a concentration column ('Conc. [copies/µL]' or 'Conc. [cp/ÂµL] (dPCR reaction)') and that the target column contains 'WPRE' and 'RPP30' values.")
-    else:
-        st.warning("Could not create summary table. Required columns ('Sample/NTC/Control', a target column ['Target' or 'Target (Name)'], and a concentration column ['Conc. [copies/µL]' or 'Conc. [cp/ÂµL] (dPCR reaction)']) not found in the uploaded CSV.")
+        else:
+            st.warning("No combined data available for export.")
+    # --- End of Combined Export Results Section ---
+else:
+    st.info("Please upload one or more CSV files to begin analysis.")
+    # Clear results when no files are uploaded
+    if 'all_files_results' in st.session_state:
+        del st.session_state.all_files_results
