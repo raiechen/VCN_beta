@@ -445,10 +445,6 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                 control_groups = ['NTC']  # Only exclude NTC, include PC for CD19 input
                 sample_groups_filtered = [group for group in sample_groups if group not in control_groups]
                 
-                # Debug: Show what sample groups were found
-                st.write(f"**Debug:** Found sample groups: {list(sample_groups)}")
-                st.write(f"**Debug:** Sample groups for CD19 input: {sample_groups_filtered}")
-                
                 # Initialize user_cd19_inputs for this file if not exists
                 file_key = f"{uploaded_file.name}_cd19"
                 if file_key not in st.session_state.user_cd19_inputs:
