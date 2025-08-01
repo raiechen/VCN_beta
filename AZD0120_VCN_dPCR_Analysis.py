@@ -2,6 +2,7 @@
 import streamlit as st
 import pandas as pd
 import io # Use io to handle the uploaded file bytes
+from io import StringIO
 import numpy as np
 import datetime # For timestamping the export file
 import re # For parsing Input ID
@@ -205,13 +206,38 @@ if uploaded_files is not None and len(uploaded_files) > 0:
         for encoding in encodings_to_try:
             try:
                 uploaded_file.seek(0) # Reset for each read attempt
-                df = pd.read_csv(uploaded_file, sep=actual_sep, header=0, skiprows=skiprows_val, encoding=encoding)
+                
+                # Read the entire file as bytes and decode to text
+                file_content = uploaded_file.read().decode(encoding)
+                
+                # Split into lines
+                all_lines = file_content.split('\n')
+                
+                # Check if first line contains 'sep=' and skip it if so
+                # Remove BOM and other invisible characters before checking
+                first_line_clean = all_lines[0].lstrip('\ufeff\ufffe').strip().lower() if all_lines else ''
+                if first_line_clean.startswith('sep='):
+                    csv_lines = all_lines[1:]  # Skip the sep= line
+                else:
+                    csv_lines = all_lines  # Use all lines
+                
+                # Remove empty lines from the end
+                while csv_lines and not csv_lines[-1].strip():
+                    csv_lines.pop()
+                
+                # Join lines back together
+                cleaned_csv_content = '\n'.join(csv_lines)
+                
+                # Create StringIO and read with pandas
+                csv_stringio = StringIO(cleaned_csv_content)
+                df = pd.read_csv(csv_stringio, sep=actual_sep)
+                        
                 read_successful = True
                 break # Exit loop if read is successful
             except UnicodeDecodeError:
                 continue # Try next encoding
             except pd.errors.EmptyDataError:
-                st.error(f"The file {uploaded_file.name} appears to be empty or became empty after skipping rows with encoding {encoding}.")
+                st.error(f"The file {uploaded_file.name} appears to be empty or became empty after processing with encoding {encoding}.")
                 df = pd.DataFrame() # Create an empty DataFrame
                 read_successful = True # Treat as "handled"
                 break
@@ -235,11 +261,25 @@ if uploaded_files is not None and len(uploaded_files) > 0:
         # Strip whitespace from all column names (helps with hidden/extra spaces)
         df.columns = df.columns.str.strip()
 
-        # Dynamically detect concentration column name
-        possible_conc_columns = ["Conc. [copies/µL]", "Conc. [cp/ÂµL] (dPCR reaction)"]
+        # Dynamically detect concentration column name with robust matching
+        possible_conc_columns = ["Conc. [copies/µL]", "Conc. [cp/ÂµL] (dPCR reaction)", "Conc. [cp/µL] (dPCR reaction)"]
+        
+        # First try exact matching
         conc_col = next((col for col in possible_conc_columns if col in df.columns), None)
+        
+        # If exact matching fails, try with stripped whitespace
         if conc_col is None:
-            st.error(f"No recognized concentration column found in CSV {uploaded_file.name}. Expected one of: 'Conc. [copies/µL]' or 'Conc. [cp/ÂµL] (dPCR reaction)'.")
+            df_columns_stripped = {col.strip(): col for col in df.columns}
+            possible_conc_columns_stripped = [col.strip() for col in possible_conc_columns]
+            conc_col_stripped = next((col for col in possible_conc_columns_stripped if col in df_columns_stripped), None)
+            if conc_col_stripped:
+                conc_col = df_columns_stripped[conc_col_stripped]
+        
+        if conc_col is None:
+            # Debug: show actual column names found
+            st.error(f"No recognized concentration column found in CSV {uploaded_file.name}.")
+            st.error(f"Expected one of: {possible_conc_columns}")
+            st.error(f"Found columns: {list(df.columns)}")
             continue # Skip to next file
 
         # Dynamically detect target column name
