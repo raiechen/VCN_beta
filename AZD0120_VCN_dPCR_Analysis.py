@@ -135,7 +135,7 @@ uploaded_files = st.file_uploader("Choose CSV files (.csv)", type=['csv'], accep
 
 # User input for CAR_PC constants
 st.subheader("CAR PC Range Configuration")
-st.write("Please set the CAR PC copy number/cell range for analysis:")
+st.write("Please set the CAR PC copy number/transduced cell range for analysis:")
 
 # Initialize session state for CAR_PC values if not exists
 if 'car_pc_min' not in st.session_state:
@@ -146,7 +146,7 @@ if 'car_pc_max' not in st.session_state:
 col1, col2 = st.columns(2)
 with col1:
     car_pc_min = st.number_input(
-        "CAR PC Min Copy Number/Cell:",
+        "CAR PC Min Copy Number/Transduced Cell:",
         min_value=0.0,
         max_value=100.0,
         value=st.session_state.car_pc_min,
@@ -158,7 +158,7 @@ with col1:
 
 with col2:
     car_pc_max = st.number_input(
-        "CAR PC Max Copy Number/Cell:",
+        "CAR PC Max Copy Number/Transduced Cell:",
         min_value=0.0,
         max_value=100.0,
         value=st.session_state.car_pc_max,
