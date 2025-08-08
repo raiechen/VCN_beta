@@ -10,11 +10,13 @@ import re # For parsing Input ID
 # Define global constants for analysis thresholds and parameters
 MIN_VALID_PARTITION = 7000
 NTC_POS_PART_CUTOFF = 5
-MAX_CV_PERCENTAGE = 21.0  # CV threshold as percentage (21%)
-LLOQ_WPRE_COPIES_UL = 37
-LLOQ_RPP30_COPIES_UL = 146
-CAR_PC_MIN_COPY_NUMBER_CELL = "TBD"  # To be determined
-CAR_PC_MAX_COPY_NUMBER_CELL = "TBD"  # To be determined
+MAX_CV_PERCENTAGE = 20.0  # CV threshold as percentage (21%)
+LLOQ_WPRE_COPIES_UL = 45.49
+LLOQ_RPP30_COPIES_UL = 4.99
+# CAR_PC constants will be set by user input
+# Default values for session state initialization
+DEFAULT_CAR_PC_MIN_COPY_NUMBER_CELL = 3.35
+DEFAULT_CAR_PC_MAX_COPY_NUMBER_CELL = 3.72
 
 def add_designation_column(summary_df, original_df, min_valid_partition, ntc_pos_part_cutoff, max_cv_percentage, lloq_wpre_copies_ul, lloq_rpp30_copies_ul):
     """
@@ -130,6 +132,47 @@ st.markdown(
 
 # Add a file uploader widget for multiple files
 uploaded_files = st.file_uploader("Choose CSV files (.csv)", type=['csv'], accept_multiple_files=True, key=f"file_uploader_{st.session_state.get('uploader_key', 0)}")
+
+# User input for CAR_PC constants
+st.subheader("CAR PC Range Configuration")
+st.write("Please set the CAR PC copy number/cell range for analysis:")
+
+# Initialize session state for CAR_PC values if not exists
+if 'car_pc_min' not in st.session_state:
+    st.session_state.car_pc_min = DEFAULT_CAR_PC_MIN_COPY_NUMBER_CELL
+if 'car_pc_max' not in st.session_state:
+    st.session_state.car_pc_max = DEFAULT_CAR_PC_MAX_COPY_NUMBER_CELL
+
+col1, col2 = st.columns(2)
+with col1:
+    car_pc_min = st.number_input(
+        "CAR PC Min Copy Number/Cell:",
+        min_value=0.0,
+        max_value=100.0,
+        value=st.session_state.car_pc_min,
+        step=0.01,
+        format="%.2f",
+        key="car_pc_min_input"
+    )
+    st.session_state.car_pc_min = car_pc_min
+
+with col2:
+    car_pc_max = st.number_input(
+        "CAR PC Max Copy Number/Cell:",
+        min_value=0.0,
+        max_value=100.0,
+        value=st.session_state.car_pc_max,
+        step=0.01,
+        format="%.2f",
+        key="car_pc_max_input"
+    )
+    st.session_state.car_pc_max = car_pc_max
+
+# Set the user-defined values as the constants for this session
+CAR_PC_MIN_COPY_NUMBER_CELL = st.session_state.car_pc_min
+CAR_PC_MAX_COPY_NUMBER_CELL = st.session_state.car_pc_max
+
+st.markdown("---")
 
 # Check if files have been uploaded
 if uploaded_files is not None and len(uploaded_files) > 0:
@@ -304,9 +347,10 @@ if uploaded_files is not None and len(uploaded_files) > 0:
             continue # Skip to next file
         
         # Assay Status Check based on NTC performance
-        assay_status_message = "Assay Status: Pass"
-        status_color = "green"
+        assay_status_message = "Assay Status: Pending"  # Start with pending until all checks complete
+        status_color = "orange"
         assay_failure_reasons = []
+        assay_pending_reasons = []
 
         # --- Comprehensive Assay Status Checks ---
 
@@ -370,20 +414,14 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                 else:
                     assay_failure_reasons.append("PC CV Check: Not enough PC RPP30 data points to calculate %CV.")
 
-        # Finalize Status
+        # Finalize Status - will be updated after PC range check
         if assay_failure_reasons:
             assay_status_message = "Assay Status: Fail"
             status_color = "red"
 
-        st.markdown(f"<h4 style='color: {status_color};'>{assay_status_message}</h4>", unsafe_allow_html=True)
-
-        # Always display the criteria in an expander
-        with st.expander("View Assay Status Criteria"):
-            if not assay_failure_reasons:
-                st.success("All assay status checks passed (NTC Partitions, Control Valid Partitions, PC %CV).")
-            else:
-                for reason in assay_failure_reasons:
-                    st.error(reason)
+        # Display will be updated after PC range check
+        assay_status_placeholder = st.empty()
+        assay_criteria_placeholder = st.empty()
                     
         # Display threshold values used in analysis
         st.write('**Thresholds Used in Analysis:**')
@@ -510,15 +548,27 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                 ).fillna(0.0)
                 
                 # Calculate "Average copy number/transduced cell"
-                def calculate_avg_copy_per_transduced_cell(row):
-                    if pd.isna(row["Copy number/cell"]) or row["User input %CD19"] == 0:
-                        return "N/A"
-                    else:
-                        return (row["Copy number/cell"] / row["User input %CD19"]) * 100
-                
-                summary_df["Average copy number/transduced cell"] = summary_df.apply(
-                    calculate_avg_copy_per_transduced_cell, axis=1
-                )
+                # First calculate the average Copy number/cell for each sample group, then divide by CD19
+                if "Copy number/cell" in summary_df.columns and "Sample Group" in summary_df.columns:
+                    # Calculate average Copy number/cell per sample group
+                    copy_number_numeric = pd.to_numeric(summary_df["Copy number/cell"], errors='coerce')
+                    avg_copy_per_group = copy_number_numeric.groupby(summary_df['Sample Group']).transform('mean')
+                    
+                    # Calculate Average copy number/transduced cell using group average
+                    def calculate_avg_copy_per_transduced_cell(avg_copy_value, cd19_value):
+                        if pd.isna(avg_copy_value) or cd19_value == 0:
+                            return "N/A"
+                        else:
+                            return (avg_copy_value / cd19_value) * 100
+                    
+                    # Apply calculation using vectorized operations
+                    summary_df["Average copy number/transduced cell"] = np.where(
+                        (pd.isna(avg_copy_per_group)) | (summary_df["User input %CD19"] == 0),
+                        "N/A",
+                        (avg_copy_per_group / summary_df["User input %CD19"]) * 100
+                    )
+                else:
+                    summary_df["Average copy number/transduced cell"] = "N/A"
                 
                 # Calculate Designation
                 if not summary_df.empty and 'Sample Group' in summary_df.columns and df is not None and not df.empty:
@@ -579,12 +629,75 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                     summary_df["Average copy number/transduced cell"] = summary_df["Average copy number/transduced cell"].astype(str)
                 st.dataframe(summary_df)
 
+                # --- PC Range Check for Assay Status ---
+                # Check if PC samples have CD19 input and are within range
+                pc_samples = summary_df[summary_df["Sample ID"].astype(str).str.startswith("PC-")]
+                
+                if not pc_samples.empty:
+                    # Check if CD19 values are provided for PC samples
+                    pc_cd19_missing = pc_samples[pc_samples["User input %CD19"] == 0.0]
+                    
+                    if not pc_cd19_missing.empty:
+                        # CD19 values missing for PC samples
+                        assay_pending_reasons.append("PC Range Check: CD19 values not provided for PC samples. Please enter CD19 values to complete assay status evaluation.")
+                    else:
+                        # CD19 values provided, check PC range
+                        pc_avg_copy_issues = []
+                        for _, row in pc_samples.iterrows():
+                            avg_copy_str = row.get("Average copy number/transduced cell", "N/A")
+                            if avg_copy_str != "N/A" and avg_copy_str != "" and pd.notna(avg_copy_str):
+                                try:
+                                    avg_copy_value = float(avg_copy_str)
+                                    if avg_copy_value < CAR_PC_MIN_COPY_NUMBER_CELL or avg_copy_value > CAR_PC_MAX_COPY_NUMBER_CELL:
+                                        pc_avg_copy_issues.append(f"PC Range Check: Sample '{row['Sample ID']}' average copy number/transduced cell ({avg_copy_value:.2f}) is outside acceptable range ({CAR_PC_MIN_COPY_NUMBER_CELL:.2f} - {CAR_PC_MAX_COPY_NUMBER_CELL:.2f}).")
+                                except (ValueError, TypeError):
+                                    pc_avg_copy_issues.append(f"PC Range Check: Sample '{row['Sample ID']}' has invalid average copy number/transduced cell value.")
+                        
+                        if pc_avg_copy_issues:
+                            assay_failure_reasons.extend(pc_avg_copy_issues)
+
+                # Final Status Determination
+                if assay_pending_reasons and not assay_failure_reasons:
+                    # Still pending - waiting for CD19 input
+                    final_assay_status_message = "Assay Status: Pending"
+                    final_status_color = "orange"
+                elif assay_failure_reasons:
+                    # Has failures
+                    final_assay_status_message = "Assay Status: Fail"
+                    final_status_color = "red"
+                else:
+                    # All checks passed
+                    final_assay_status_message = "Assay Status: Pass"
+                    final_status_color = "green"
+
+                # Update the placeholder with final status
+                with assay_status_placeholder:
+                    st.markdown(f"<h4 style='color: {final_status_color};'>{final_assay_status_message}</h4>", unsafe_allow_html=True)
+
+                # Update the criteria display
+                with assay_criteria_placeholder:
+                    with st.expander("View Assay Status Criteria"):
+                        if final_assay_status_message == "Assay Status: Pass":
+                            st.success("All assay status checks passed (NTC Partitions, Control Valid Partitions, PC %CV, PC Range).")
+                        else:
+                            if assay_failure_reasons:
+                                for reason in assay_failure_reasons:
+                                    st.error(reason)
+                            if assay_pending_reasons:
+                                for reason in assay_pending_reasons:
+                                    st.warning(reason)
+
+                # Update variables for storage
+                assay_status_message = final_assay_status_message
+                status_color = final_status_color
+
                 # Store results for this file
                 st.session_state.all_files_results[uploaded_file.name] = {
                     'summary_df': summary_df.copy(),
                     'original_df': df.copy(),
                     'assay_status_message': assay_status_message,
-                    'assay_failure_reasons': assay_failure_reasons.copy()
+                    'assay_failure_reasons': assay_failure_reasons.copy(),
+                    'assay_pending_reasons': assay_pending_reasons.copy()
                 }
             except Exception as e:
                 st.error(f"Error creating summary table for {uploaded_file.name}: {e}")
@@ -600,7 +713,12 @@ if uploaded_files is not None and len(uploaded_files) > 0:
         # Display summary of all processed files
         st.subheader("Files Processed:")
         for filename, results in st.session_state.all_files_results.items():
-            status_color = "green" if "Pass" in results['assay_status_message'] else "red"
+            if "Pass" in results['assay_status_message']:
+                status_color = "green"
+            elif "Pending" in results['assay_status_message']:
+                status_color = "orange"
+            else:
+                status_color = "red"
             st.markdown(f"- **{filename}**: <span style='color: {status_color};'>{results['assay_status_message']}</span>", unsafe_allow_html=True)
         
         st.markdown("---")
@@ -629,6 +747,7 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                 'Source_File': filename,
                 'Assay_Status': results['assay_status_message'].replace("Assay Status: ", ""),
                 'Failure_Reasons': "; ".join(results['assay_failure_reasons']) if results['assay_failure_reasons'] else "None",
+                'Pending_Reasons': "; ".join(results.get('assay_pending_reasons', [])) if results.get('assay_pending_reasons') else "None",
                 'Analysis_Timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'MIN_VALID_PARTITION': MIN_VALID_PARTITION,
                 'NTC_POS_PART_CUTOFF': NTC_POS_PART_CUTOFF,
