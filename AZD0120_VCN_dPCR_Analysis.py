@@ -181,9 +181,9 @@ if uploaded_files is not None and len(uploaded_files) > 0:
     if 'all_files_results' not in st.session_state:
         st.session_state.all_files_results = {}
     
-    # Initialize session state for CD19 user inputs
-    if 'user_cd19_inputs' not in st.session_state:
-        st.session_state.user_cd19_inputs = {}
+    # Initialize session state for CAR user inputs
+    if 'user_car_inputs' not in st.session_state:
+        st.session_state.user_car_inputs = {}
     
     # Process each uploaded file
     for file_index, uploaded_file in enumerate(uploaded_files):
@@ -514,58 +514,58 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                     summary_df["WPRE Concentration %CV"] = np.nan
                     summary_df["RPP30 Concentration %CV"] = np.nan
 
-                # User input for %CD19 values
-                st.subheader("User Input for %CD19 Values")
-                st.write("Please enter the %CD19 values for each sample group:")
+                # User input for %CAR values
+                st.subheader("User Input for %CAR Values")
+                st.write("Please enter the %CAR values for each sample group:")
                 
                 # Get unique sample groups (excluding only NTC, but including PC)
                 sample_groups = summary_df['Sample Group'].unique()
-                control_groups = ['NTC']  # Only exclude NTC, include PC for CD19 input
+                control_groups = ['NTC']  # Only exclude NTC, include PC for CAR input
                 sample_groups_filtered = [group for group in sample_groups if group not in control_groups]
                 
-                # Initialize user_cd19_inputs for this file if not exists
-                file_key = f"{uploaded_file.name}_cd19"
-                if file_key not in st.session_state.user_cd19_inputs:
-                    st.session_state.user_cd19_inputs[file_key] = {}
+                # Initialize user_car_inputs for this file if not exists
+                file_key = f"{uploaded_file.name}_car"
+                if file_key not in st.session_state.user_car_inputs:
+                    st.session_state.user_car_inputs[file_key] = {}
                 
                 # Create input fields for each sample group
                 for group in sample_groups_filtered:
-                    default_value = st.session_state.user_cd19_inputs[file_key].get(group, 0.0)
+                    default_value = st.session_state.user_car_inputs[file_key].get(group, 0.0)
                     user_input = st.number_input(
-                        f"%CD19 for {group}:",
+                        f"%CAR for {group}:",
                         min_value=0.0,
                         max_value=100.0,
                         value=default_value,
                         step=0.1,
                         format="%.1f",
-                        key=f"{file_key}_{group}_cd19"
+                        key=f"{file_key}_{group}_car"
                     )
-                    st.session_state.user_cd19_inputs[file_key][group] = user_input
+                    st.session_state.user_car_inputs[file_key][group] = user_input
                 
                 # Apply user inputs to summary_df
-                summary_df["User input %CD19"] = summary_df['Sample Group'].map(
-                    st.session_state.user_cd19_inputs[file_key]
+                summary_df["User input %CAR"] = summary_df['Sample Group'].map(
+                    st.session_state.user_car_inputs[file_key]
                 ).fillna(0.0)
                 
                 # Calculate "Average copy number/transduced cell"
-                # First calculate the average Copy number/cell for each sample group, then divide by CD19
+                # First calculate the average Copy number/cell for each sample group, then divide by CAR
                 if "Copy number/cell" in summary_df.columns and "Sample Group" in summary_df.columns:
                     # Calculate average Copy number/cell per sample group
                     copy_number_numeric = pd.to_numeric(summary_df["Copy number/cell"], errors='coerce')
                     avg_copy_per_group = copy_number_numeric.groupby(summary_df['Sample Group']).transform('mean')
                     
                     # Calculate Average copy number/transduced cell using group average
-                    def calculate_avg_copy_per_transduced_cell(avg_copy_value, cd19_value):
-                        if pd.isna(avg_copy_value) or cd19_value == 0:
+                    def calculate_avg_copy_per_transduced_cell(avg_copy_value, car_value):
+                        if pd.isna(avg_copy_value) or car_value == 0:
                             return "N/A"
                         else:
-                            return (avg_copy_value / cd19_value) * 100
+                            return (avg_copy_value / car_value) * 100
                     
                     # Apply calculation using vectorized operations
                     summary_df["Average copy number/transduced cell"] = np.where(
-                        (pd.isna(avg_copy_per_group)) | (summary_df["User input %CD19"] == 0),
+                        (pd.isna(avg_copy_per_group)) | (summary_df["User input %CAR"] == 0),
                         "N/A",
-                        (avg_copy_per_group / summary_df["User input %CD19"]) * 100
+                        (avg_copy_per_group / summary_df["User input %CAR"]) * 100
                     )
                 else:
                     summary_df["Average copy number/transduced cell"] = "N/A"
@@ -606,7 +606,7 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                     "WPRE Concentration": "WPRE Concentration",
                     "RPP30 Concentration": "RPP30 Concentration", 
                     "Copy number/cell": "Copy number/cell",
-                    "User input %CD19": "User input %CD19",
+                    "User input %CAR": "User input %CAR",
                     "Average copy number/transduced cell": "Average copy number/transduced cell",
                     "WPRE Concentration %CV": "WPRE Concentration %CV",
                     "RPP30 Concentration %CV": "RPP30 Concentration %CV",
@@ -630,18 +630,18 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                 st.dataframe(summary_df)
 
                 # --- PC Range Check for Assay Status ---
-                # Check if PC samples have CD19 input and are within range
+                # Check if PC samples have CAR input and are within range
                 pc_samples = summary_df[summary_df["Sample ID"].astype(str).str.startswith("PC-")]
                 
                 if not pc_samples.empty:
-                    # Check if CD19 values are provided for PC samples
-                    pc_cd19_missing = pc_samples[pc_samples["User input %CD19"] == 0.0]
+                    # Check if CAR values are provided for PC samples
+                    pc_car_missing = pc_samples[pc_samples["User input %CAR"] == 0.0]
                     
-                    if not pc_cd19_missing.empty:
-                        # CD19 values missing for PC samples
-                        assay_pending_reasons.append("PC Range Check: CD19 values not provided for PC samples. Please enter CD19 values to complete assay status evaluation.")
+                    if not pc_car_missing.empty:
+                        # CAR values missing for PC samples
+                        assay_pending_reasons.append("PC Range Check: CAR values not provided for PC samples. Please enter CAR values to complete assay status evaluation.")
                     else:
-                        # CD19 values provided, check PC range
+                        # CAR values provided, check PC range
                         pc_avg_copy_issues = []
                         for _, row in pc_samples.iterrows():
                             avg_copy_str = row.get("Average copy number/transduced cell", "N/A")
@@ -658,7 +658,7 @@ if uploaded_files is not None and len(uploaded_files) > 0:
 
                 # Final Status Determination
                 if assay_pending_reasons and not assay_failure_reasons:
-                    # Still pending - waiting for CD19 input
+                    # Still pending - waiting for CAR input
                     final_assay_status_message = "Assay Status: Pending"
                     final_status_color = "orange"
                 elif assay_failure_reasons:
