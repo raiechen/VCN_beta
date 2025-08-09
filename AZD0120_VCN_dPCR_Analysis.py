@@ -474,6 +474,11 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                         np.nan,  # Result is NaN if RPP30 is 0 or NaN
                         (wpre_conc / rpp30_conc) * 2
                     )
+                    
+                    # Round to 2 decimal places
+                    summary_df["WPRE Concentration"] = wpre_conc.round(2)
+                    summary_df["RPP30 Concentration"] = rpp30_conc.round(2)
+                    summary_df["Copy number/cell"] = summary_df["Copy number/cell"].round(2)
                 else:
                     # If one of the concentration columns is missing, create the "Copy number/cell" column with NaNs
                     summary_df["Copy number/cell"] = np.nan
@@ -545,7 +550,7 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                 # Apply user inputs to summary_df
                 summary_df["User input %CAR"] = summary_df['Sample Group'].map(
                     st.session_state.user_car_inputs[file_key]
-                ).fillna(0.0)
+                ).fillna(0.0).round(2)
                 
                 # Calculate "Average copy number/transduced cell"
                 # First calculate the average Copy number/cell for each sample group, then divide by CAR
@@ -565,7 +570,7 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                     summary_df["Average copy number/transduced cell"] = np.where(
                         (pd.isna(avg_copy_per_group)) | (summary_df["User input %CAR"] == 0),
                         "N/A",
-                        (avg_copy_per_group / summary_df["User input %CAR"]) * 100
+                        ((avg_copy_per_group / summary_df["User input %CAR"]) * 100).round(2)
                     )
                 else:
                     summary_df["Average copy number/transduced cell"] = "N/A"
@@ -619,15 +624,49 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                     if col_key in summary_df.columns:
                         final_columns.append(col_name)
                 
+                # Round all numerical columns to 2 decimal places for display BEFORE column selection
+                numerical_columns = ["WPRE Concentration", "RPP30 Concentration", "Copy number/cell", 
+                                   "User input %CAR", "WPRE Concentration %CV", "RPP30 Concentration %CV"]
+                
+                for col in numerical_columns:
+                    if col in summary_df.columns:
+                        summary_df[col] = pd.to_numeric(summary_df[col], errors='coerce').round(2)
+                
                 # Ensure only existing columns are selected and dataframe is not empty
                 existing_columns = [col for col in final_columns if col in summary_df.columns]
                 if existing_columns:
                     summary_df = summary_df[existing_columns]
-
+                
                 # Convert 'Average copy number/transduced cell' to string to handle "N/A" for display
                 if "Average copy number/transduced cell" in summary_df.columns:
-                    summary_df["Average copy number/transduced cell"] = summary_df["Average copy number/transduced cell"].astype(str)
-                st.dataframe(summary_df)
+                    # First round numerical values, then convert to string
+                    summary_df["Average copy number/transduced cell"] = summary_df["Average copy number/transduced cell"].apply(
+                        lambda x: f"{float(x):.2f}" if x != "N/A" and pd.notna(x) and str(x) != "N/A" else "N/A"
+                    )
+                
+                # Apply styling to highlight 'Average copy number/transduced cell' column with light green
+                # and format all numerical columns to 2 decimal places
+                if "Average copy number/transduced cell" in summary_df.columns:
+                    def highlight_avg_copy_column(df):
+                        styles = pd.DataFrame('', index=df.index, columns=df.columns)
+                        styles['Average copy number/transduced cell'] = 'background-color: lightgreen'
+                        return styles
+                    
+                    # Format numerical columns to 2 decimal places
+                    format_dict = {}
+                    for col in numerical_columns:
+                        if col in summary_df.columns:
+                            format_dict[col] = '{:.2f}'
+                    
+                    st.dataframe(summary_df.style.apply(highlight_avg_copy_column, axis=None).format(format_dict))
+                else:
+                    # Format numerical columns to 2 decimal places even without highlighting
+                    format_dict = {}
+                    for col in numerical_columns:
+                        if col in summary_df.columns:
+                            format_dict[col] = '{:.2f}'
+                    
+                    st.dataframe(summary_df.style.format(format_dict))
 
                 # --- PC Range Check for Assay Status ---
                 # Check if PC samples have CAR input and are within range
