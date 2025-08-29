@@ -13,10 +13,6 @@ NTC_POS_PART_CUTOFF = 5
 MAX_CV_PERCENTAGE = 20.0  # CV threshold as percentage (21%)
 LLOQ_WPRE_COPIES_UL = 45.49
 LLOQ_RPP30_COPIES_UL = 4.99
-# CAR_PC constants will be set by user input
-# Default values for session state initialization
-DEFAULT_CAR_PC_MIN_COPY_NUMBER_CELL = 3.35
-DEFAULT_CAR_PC_MAX_COPY_NUMBER_CELL = 3.72
 
 def add_designation_column(summary_df, original_df, min_valid_partition, ntc_pos_part_cutoff, max_cv_percentage, lloq_wpre_copies_ul, lloq_rpp30_copies_ul):
     """
@@ -126,53 +122,13 @@ def dfs_to_excel_bytes(dfs_map):
 
 # Set the title of the Streamlit app
 st.markdown(
-    "<h2 style='text-align: left; color: black;'>AZD0120 VCN dPCR Analysis App beta v0.1</h2>",
+    "<h2 style='text-align: left; color: black;'>AZD0120 VCN dPCR Analysis App beta QC v0.1</h2>",
     unsafe_allow_html=True
 )
 
 # Add a file uploader widget for multiple files
 uploaded_files = st.file_uploader("Choose CSV files (.csv)", type=['csv'], accept_multiple_files=True, key=f"file_uploader_{st.session_state.get('uploader_key', 0)}")
 
-# User input for CAR_PC constants
-st.subheader("CAR PC Range Configuration")
-st.write("Please set the CAR PC copy number/transduced cell range for analysis:")
-
-# Initialize session state for CAR_PC values if not exists
-if 'car_pc_min' not in st.session_state:
-    st.session_state.car_pc_min = DEFAULT_CAR_PC_MIN_COPY_NUMBER_CELL
-if 'car_pc_max' not in st.session_state:
-    st.session_state.car_pc_max = DEFAULT_CAR_PC_MAX_COPY_NUMBER_CELL
-
-col1, col2 = st.columns(2)
-with col1:
-    car_pc_min = st.number_input(
-        "CAR PC Min Copy Number/Transduced Cell:",
-        min_value=0.0,
-        max_value=100.0,
-        value=st.session_state.car_pc_min,
-        step=0.01,
-        format="%.2f",
-        key="car_pc_min_input"
-    )
-    st.session_state.car_pc_min = car_pc_min
-
-with col2:
-    car_pc_max = st.number_input(
-        "CAR PC Max Copy Number/Transduced Cell:",
-        min_value=0.0,
-        max_value=100.0,
-        value=st.session_state.car_pc_max,
-        step=0.01,
-        format="%.2f",
-        key="car_pc_max_input"
-    )
-    st.session_state.car_pc_max = car_pc_max
-
-# Set the user-defined values as the constants for this session
-CAR_PC_MIN_COPY_NUMBER_CELL = st.session_state.car_pc_min
-CAR_PC_MAX_COPY_NUMBER_CELL = st.session_state.car_pc_max
-
-st.markdown("---")
 
 # Check if files have been uploaded
 if uploaded_files is not None and len(uploaded_files) > 0:
@@ -430,8 +386,6 @@ if uploaded_files is not None and len(uploaded_files) > 0:
         st.write(f"MAX_CV_PERCENTAGE: {MAX_CV_PERCENTAGE}%")
         st.write(f"LLOQ_WPRE_COPIES_UL: {LLOQ_WPRE_COPIES_UL}")
         st.write(f"LLOQ_RPP30_COPIES_UL: {LLOQ_RPP30_COPIES_UL}")
-        st.write(f"CAR_PC_MIN_COPY_NUMBER_CELL: {CAR_PC_MIN_COPY_NUMBER_CELL}")
-        st.write(f"CAR_PC_MAX_COPY_NUMBER_CELL: {CAR_PC_MAX_COPY_NUMBER_CELL}")
         st.markdown("---") # Add a horizontal line for separation
         with st.expander("CSV Uploaded Table", expanded=False):
             st.dataframe(df)
@@ -668,32 +622,6 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                     
                     st.dataframe(summary_df.style.format(format_dict))
 
-                # --- PC Range Check for Assay Status ---
-                # Check if PC samples have CAR input and are within range
-                pc_samples = summary_df[summary_df["Sample ID"].astype(str).str.startswith("PC-")]
-                
-                if not pc_samples.empty:
-                    # Check if CAR values are provided for PC samples
-                    pc_car_missing = pc_samples[pc_samples["User input %CAR"] == 0.0]
-                    
-                    if not pc_car_missing.empty:
-                        # CAR values missing for PC samples
-                        assay_pending_reasons.append("PC Range Check: CAR values not provided for PC samples. Please enter CAR values to complete assay status evaluation.")
-                    else:
-                        # CAR values provided, check PC range
-                        pc_avg_copy_issues = []
-                        for _, row in pc_samples.iterrows():
-                            avg_copy_str = row.get("Average copy number/transduced cell", "N/A")
-                            if avg_copy_str != "N/A" and avg_copy_str != "" and pd.notna(avg_copy_str):
-                                try:
-                                    avg_copy_value = float(avg_copy_str)
-                                    if avg_copy_value < CAR_PC_MIN_COPY_NUMBER_CELL or avg_copy_value > CAR_PC_MAX_COPY_NUMBER_CELL:
-                                        pc_avg_copy_issues.append(f"PC Range Check: Sample '{row['Sample ID']}' average copy number/transduced cell ({avg_copy_value:.2f}) is outside acceptable range ({CAR_PC_MIN_COPY_NUMBER_CELL:.2f} - {CAR_PC_MAX_COPY_NUMBER_CELL:.2f}).")
-                                except (ValueError, TypeError):
-                                    pc_avg_copy_issues.append(f"PC Range Check: Sample '{row['Sample ID']}' has invalid average copy number/transduced cell value.")
-                        
-                        if pc_avg_copy_issues:
-                            assay_failure_reasons.extend(pc_avg_copy_issues)
 
                 # Final Status Determination
                 if assay_pending_reasons and not assay_failure_reasons:
@@ -717,7 +645,7 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                 with assay_criteria_placeholder:
                     with st.expander("View Assay Status Criteria"):
                         if final_assay_status_message == "Assay Status: Pass":
-                            st.success("All assay status checks passed (NTC Partitions, Control Valid Partitions, PC %CV, PC Range).")
+                            st.success("All assay status checks passed (NTC Partitions, Control Valid Partitions, PC %CV).")
                         else:
                             if assay_failure_reasons:
                                 for reason in assay_failure_reasons:
@@ -793,8 +721,6 @@ if uploaded_files is not None and len(uploaded_files) > 0:
                 'MAX_CV_PERCENTAGE': MAX_CV_PERCENTAGE,
                 'LLOQ_WPRE_COPIES_UL': LLOQ_WPRE_COPIES_UL,
                 'LLOQ_RPP30_COPIES_UL': LLOQ_RPP30_COPIES_UL,
-                'CAR_PC_MIN_COPY_NUMBER_CELL': CAR_PC_MIN_COPY_NUMBER_CELL,
-                'CAR_PC_MAX_COPY_NUMBER_CELL': CAR_PC_MAX_COPY_NUMBER_CELL
             }
             all_assay_status_data.append(assay_status_row)
         
